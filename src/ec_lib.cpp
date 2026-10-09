@@ -1944,6 +1944,40 @@ const EcEvent* EcEventAt(int lib, int dt, int idx)
     return &g_events[k];
 }
 
+// 诊断：把所有支持库数据类型的**事件名表**倒成文本（`ECLONE_DUMP_EVENTS=<路径>`）。
+// 为什么要它：打开真 .e 时，文件里的子程序名是**被英化插件改过的英文事件名**
+// （`_cmdSort_Click`），而原版左树显示中文名（`_cmdSort_被单击`）。
+// 中文事件名的权威来源就是支持库元数据（`被单击` 在 krnln.fne 里、在 e.exe 里搜不到），
+// 所以把这张表整体导出，才能定死"英文名 -> 中文名"的对应，而不是靠硬编码几条。
+void EcDumpEventsIfAsked()
+{
+    TCHAR szPath[MAX_PATH * 2];
+    if (::GetEnvironmentVariable(_T("ECLONE_DUMP_EVENTS"), szPath, MAX_PATH * 2) <= 0)
+        return;
+    FILE* f = _tfopen(szPath, _T("wb"));
+    if (!f) return;
+    int li, dti;
+    for (li = 0; li < (int)g_libs.size(); li++)
+    {
+        fprintf(f, "LIB %d %s\r\n", li, (LPCTSTR)g_libs[li].name);
+        for (dti = 0; dti < g_libs[li].nDataType; dti++)
+        {
+            const EcDataType* d = EcDtAt(li, dti);
+            if (d == NULL) continue;
+            fprintf(f, "  DT %d state=0x%08X events=%d %s\r\n",
+                    dti, d->state, d->eventCount, (LPCTSTR)d->name);
+            for (int k = 0; k < d->eventCount; k++)
+            {
+                const EcEvent* e = EcEventAt(li, dti, k);
+                if (e == NULL) continue;
+                // eg 是英文名（如果库自己带的话），name 是显示名
+                fprintf(f, "    E %d %s\r\n", k, (LPCTSTR)e->name);
+            }
+        }
+    }
+    fclose(f);
+}
+
 // UNIT_PROPERTY_VALUE：8 字节的联合（lib2.h:583），这里按 UD_* 类型解释
 union EC_PROP_VALUE
 {

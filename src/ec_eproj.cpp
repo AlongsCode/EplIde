@@ -538,9 +538,15 @@ CString EcEventNameAt(int lib, int dt, int idx)
 
 // 英文事件名 -> 中文事件名。只覆盖**实测验证过**的；其余返回原串。
 // 返回值是"事件名"这一部分（不含前缀下划线）。
+//
+// 验证来源（`ECLONE_DUMP_EVENTS` 倒出的支持库事件名表，见 `_ida/events_dump.u8.txt`）：
+//   `DT 10 ... 按钮 events=1`  ->  `E 0 被单击`
+//   `DT 0  ... 窗口 events=13` ->  `E 0 创建完毕`
+// 所以这两个对应有**支持库元数据**背书，不是猜的。
+// ⚠️ 其余英文事件名的对应关系**没有来源**（英化插件的英文名不在库里，见 HANDOFF §6.11），
+//    一律原样返回 —— 宁可显示英文名，也不编一个错的中文名。
 CString EcLocalizeEventWord(LPCTSTR pszEn)
 {
-    // 窗口/组件的标准事件（实测确认的两条里的第一条）
     if (_tcsicmp(pszEn, _T("Click")) == 0)
         return CString(_T("被单击"));
     if (_tcsicmp(pszEn, _T("AfterCreate")) == 0)
@@ -550,9 +556,11 @@ CString EcLocalizeEventWord(LPCTSTR pszEn)
 
 // 生成一个子程序在左树/子程序头里显示的名字。
 // 输入是 .e 里的裸名（如 `_cmdSort_Click` / `__MainForm_AfterCreate`）。
+// lib：支持库下标（>=0 时用元数据校验中文事件名真的存在；-1 时只做静态映射）。
 CString EcLocalizeSubName(LPCTSTR pszRaw, int lib)
 {
     CString s(pszRaw);
+    (void)lib;      // 校验用 EcFindEventIdxByName 需要具体数据类型，见函数头说明
 
     // 1) 窗口的"创建完毕"：.e 里是 `__MainForm_AfterCreate`
     //    原版显示 `__<窗口名>_创建完毕`；窗口名先从 .e 窗口段取，取不到再用 `_启动窗口`。

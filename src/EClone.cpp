@@ -3088,6 +3088,10 @@ BOOL CECloneApp::InitInstance()
     //（SetText 里那句 DumpModel() 已经把模型写到 ECLONE_DUMP_MODEL 指的文件）
     if (g_bExitAfterInit)
     {
+        // 诊断：把所有支持库的事件名表倒出来（ECLONE_DUMP_EVENTS=<路径>）。
+        // ⚠️ 必须放在这里 —— 支持库是 CMainFrame/PopulatePanes 阶段才载入的，
+        //    放在 EcCfgLoad() 附近会倒出**空文件**（实测踩过）。
+        EcDumpEventsIfAsked();
         // 退出前**强制重倒一次**：切页那一步（ECLONE_START_PAGE）是在子窗口建好之后做的，
         // 而 SetText 里自动倒的那次用的是切页**之前**的 m_nKind，会把文件覆盖成程序集页的模型。
         // EC_WM_REDUMP 是 ec_editor 里现成的诊断消息（OnRedump -> DumpModel）。

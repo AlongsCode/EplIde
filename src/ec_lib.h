@@ -216,6 +216,10 @@ const EcProp* EcPropAt(int lib, int dt, int idx);       // 第 idx 个属性（�
 // （`_cmdSort_Click`），而原版左树显示的是 `_cmdSort_被单击`。
 // 中文事件名只能从支持库元数据取（实测 `被单击` 在 krnln.fne 里有、在 e.exe 里搜不到）。
 const EcEvent* EcEventAt(int lib, int dt, int idx);
+// 诊断：把所有支持库数据类型的**事件名表**倒成文本（`ECLONE_DUMP_EVENTS=<路径>`）。
+// 中文事件名只能从支持库元数据取（`被单击` 在 krnln.fne 里有、在 e.exe 里搜不到）；
+// 这张表是"英文事件名 -> 中文事件名"对应的权威来源。
+void EcDumpEventsIfAsked();
 BOOL  EcDtIsUnit(int lib, int dt);                      // 是窗口组件（含不可视的功能组件）
 BOOL  EcDtIsVisualUnit(int lib, int dt);                // 是**可视**组件（能放到设计窗体上画出来）
 // 组件箱图标诊断（`ECLONE_DUMP_DTICON=<path>`）：倒出每个窗口组件类型的 m_nBmpID 等字段。
