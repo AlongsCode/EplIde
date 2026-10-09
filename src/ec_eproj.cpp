@@ -638,9 +638,34 @@ BOOL EcIsEFile(LPCTSTR pszPath)
     return bOk;
 }
 
+// ECLONE_TIME=1 时分阶段计时（打到 stderr）
+static void EcTimeMark2A(const char* pszStage, DWORD dwStart)
+{
+    char szOn[8];
+    if (::GetEnvironmentVariableA("ECLONE_TIME", szOn, sizeof(szOn)) == 0) return;
+    char szMsg[256];
+    ::wsprintfA(szMsg, "[ECLONE_TIME] %s : %lu ms\n", pszStage,
+                (unsigned long)(::GetTickCount() - dwStart));
+    ::OutputDebugStringA(szMsg);
+    ::fputs(szMsg, stderr);
+}
+
+static void EcTimeMark2(LPCTSTR pszStage, DWORD dwStart)
+{
+    char szOn[8];
+    if (::GetEnvironmentVariableA("ECLONE_TIME", szOn, sizeof(szOn)) == 0) return;
+    char szMsg[256];
+    ::wsprintfA(szMsg, "[ECLONE_TIME] %s : %lu ms\n", (const char*)pszStage,
+                (unsigned long)(::GetTickCount() - dwStart));
+    ::OutputDebugStringA(szMsg);
+    ::fputs(szMsg, stderr);
+}
+
 BOOL EcLoadEProject(LPCTSTR pszPath, CString& strOut)
 {
     strOut.Empty();
+    DWORD dwT0 = ::GetTickCount();
+    DWORD dwT1 = 0, dwT2 = 0, dwT3 = 0;
 
     CString sTrace;
     sTrace.Format(_T("path=%s\r\n"), pszPath);
@@ -725,9 +750,15 @@ BOOL EcLoadEProject(LPCTSTR pszPath, CString& strOut)
     }
     if (progPayload.empty()) return FALSE;
 
+    dwT1 = ::GetTickCount();
+    EcTimeMark2A("1_segwalk", dwT0);
+
     // ---- 2. 解程序段 ----
     EcProgram prog;
     if (!EcParseProgram(progPayload, cp, prog)) return FALSE;
+
+    dwT2 = ::GetTickCount();
+    EcTimeMark2A("2_parseprogram", dwT1);
 
     // ---- 3. 生成文本源码 ----
     // 结构：.版本 2 / .程序集(含 .程序集变量 + .子程序(含 .参数 .局部变量)) /
@@ -802,7 +833,10 @@ BOOL EcLoadEProject(LPCTSTR pszPath, CString& strOut)
             for (size_t li = 0; li < m.locals.size(); li++)
                 EcLine(out, EcVarLine(_T(".局部变量"), m.locals[li], cp, FALSE, libIdx, prog));
 
-            // ---- 子程序正文：解码 expression 字节码 ----
+            dwT3 = ::GetTickCount();
+    EcTimeMark2A("3_textgen", dwT2);
+
+    // ---- 子程序正文：解码 expression 字节码 ----
             // 规格见 D:\EPL\_ida\SEGMENT_SPEC.md §3.6（321 子程序验证过）
             {
                 CString strErr;
