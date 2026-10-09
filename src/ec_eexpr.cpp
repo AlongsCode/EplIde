@@ -245,6 +245,9 @@ CString ERender::Expr(unsigned char tok, int d)
     switch (tok)
     {
     // dec3.py: tok==22 (0x16) EMPTY_ARGUMENTS -> "空"，并且**跳过一个字节**
+    // 0xFF 是分隔/终结符（sub_4BEAE0(0xFF)==0，不属任何字面量类）。
+    // 代码里它不是语句/表达式的载荷 -> 返回空且不报错。
+    case 0xFF: return CString();
     case 0x16: { s.u8(); return CString(_T("空")); }
     case 0x3B: { int v = s.i32(); CString t; t.Format(_T("%d"), v); return t; }
     case 0x17: return Num(s.dbl());
