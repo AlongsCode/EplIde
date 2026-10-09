@@ -1378,6 +1378,15 @@ int EcTreeCount() { return g_nodes.size(); }
 
 const EcTreeNode& EcTreeNodeAt(int i) { return g_nodes[i]; }
 
+// ⚠️ 判据必须只覆盖**库级命令**（每个库的 [cmdStart, cmdStart+nCmd) 区间），
+//    不能用整个 g_cmds —— 因为加载时把每个数据类型的成员命令**又 push 了一份**到
+//    g_cmds 里（见 LoadLibFromMemory 里那段 `g_cmds.push_back(tmp)`），
+//    krnln 1.0 实测：51 个类型的成员项合计 297 条，所以 g_cmds.size() = 688+297 = **985**。
+//    那些副本会覆盖同名库命令的映射，于是 `信息框`/`取空白字节集` 这类库命令被认成
+//    成员命令（返回 1 之外的语义），着色和参数表都跟着错。
+//    （依据：D:\EPL\_ida\KRNLN_SPEC.md 的「ec_lib.cpp 唯一的实质 bug」一节，
+//      运行期实测 m_pnCmdsIndex 合计 297、且本库有 57 个重名命令。）
+
 // ------------------------------------------------------------------ 名字分类
 // 编辑器着色要区分「支持库命令」和「普通变量」，直接复用已经载入的命令/数据类型表。
 // 建一次 CMap 缓存（载入支持库之后再调用，表大小没变就直接命中）。
@@ -1393,8 +1402,21 @@ int EcNameKind(LPCTSTR pszName)
     {
         s_map.RemoveAll();
         size_t i;
-        for (i = 0; i < g_cmds.size(); i++)
-            if (!g_cmds[i].name.IsEmpty()) s_map[g_cmds[i].name] = 1;
+        // ⚠️ 命令那一遍**只能遍历库级区间**：整表遍历会把成员命令副本也写进映射，
+        //    而副本在表里靠后，于是覆盖掉同名库命令 -> 库命令被判成成员命令（见上面说明）。
+        //    （krnln：688 条库级 + 297 条成员副本 = 985，后者覆盖前者。）
+        size_t li;
+        for (li = 0; li < g_libs.size(); li++)
+        {
+            const EcLib& L = g_libs[li];
+            int k;
+            for (k = 0; k < L.nCmd; k++)
+            {
+                int ci = L.cmdStart + k;
+                if (ci < 0 || ci >= (int)g_cmds.size()) break;
+                if (!g_cmds[ci].name.IsEmpty()) s_map[g_cmds[ci].name] = 1;
+            }
+        }
         for (i = 0; i < g_dts.size(); i++)
             if (!g_dts[i].name.IsEmpty()) s_map[g_dts[i].name] = 2;
         for (i = 0; i < g_consts.size(); i++)
@@ -1422,6 +1444,23 @@ int EcNameKind(LPCTSTR pszName)
 // ------------------------------------------------------------------ 参数名（「参数归属线」用）
 // 原版在语句下面按参数个数各画一行「※参数名：值」；参数名只有支持库里有，
 // 所以按命令名回查已经载入的 EcCmd 参数表（eg 英文名也认）。
+// 取一条命令的参数表。li = 这条命令属于哪个库（参数类型名要按库解释）。
+static BOOL EcFillArgs(const EcCmd& C, int li, std::vector<CString>* pNames,
+                       std::vector<CString>* pTypes, std::vector<BOOL>* pDef)
+{
+    for (int i = 0; i < C.argCount; i++)
+    {
+        int ai = C.argStart + i;
+        if (ai < 0 || ai >= (int)g_args.size()) break;
+        const EcArg& A = g_args[ai];
+        if (pNames) pNames->push_back(A.name);
+        if (pTypes) pTypes->push_back(EcTypeName(A.type, li, TRUE));
+        if (pDef)   pDef->push_back((A.state & (EC_AS_HAS_DEFAULT_VALUE |
+                                               EC_AS_DEFAULT_VALUE_IS_EMPTY)) ? TRUE : FALSE);
+    }
+    return TRUE;
+}
+
 BOOL EcCmdArgsByName(LPCTSTR pszName, std::vector<CString>* pNames,
                      std::vector<CString>* pTypes, std::vector<BOOL>* pDef)
 {
@@ -1432,27 +1471,23 @@ BOOL EcCmdArgsByName(LPCTSTR pszName, std::vector<CString>* pNames,
         return FALSE;
 
     CString want(pszName);
-    for (size_t ci = 0; ci < g_cmds.size(); ci++)
+    // ⚠️ 只遍历**库级命令**区间，不遍历整个 g_cmds：后者含成员命令副本（见 EcIsLibCmdName
+    //    上面那段说明）。成员命令重名严重（krnln 实测 57 个重名：关闭/写出/取项目数/加入项目…），
+    //    线性取第一个命中会让参数表**返回哪一份不可预测**，参数归属线就画错。
+    size_t li;
+    for (li = 0; li < g_libs.size(); li++)
     {
-        const EcCmd& C = g_cmds[ci];
-        if (C.name != want && (C.eg.IsEmpty() || C.eg != want))
-            continue;
-        // 找这个命令属于哪个库（参数类型名要按库解释）
-        int li = 0;
-        for (size_t k = 0; k < g_libs.size(); k++)
+        const EcLib& L = g_libs[li];
+        int k;
+        for (k = 0; k < L.nCmd; k++)
         {
-            const EcLib& L = g_libs[k];
-            if ((int)ci >= L.cmdStart && (int)ci < L.cmdStart + L.nCmd) { li = (int)k; break; }
+            int ci = L.cmdStart + k;
+            if (ci < 0 || ci >= (int)g_cmds.size()) break;
+            const EcCmd& C = g_cmds[ci];
+            if (C.name != want && (C.eg.IsEmpty() || C.eg != want))
+                continue;
+            return EcFillArgs(C, (int)li, pNames, pTypes, pDef);
         }
-        for (int i = 0; i < C.argCount; i++)
-        {
-            const EcArg& A = g_args[C.argStart + i];
-            if (pNames) pNames->push_back(A.name);
-            if (pTypes) pTypes->push_back(EcTypeName(A.type, li, TRUE));
-            if (pDef)   pDef->push_back((A.state & (EC_AS_HAS_DEFAULT_VALUE |
-                                                   EC_AS_DEFAULT_VALUE_IS_EMPTY)) ? TRUE : FALSE);
-        }
-        return TRUE;
     }
     return FALSE;
 }

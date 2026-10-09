@@ -2373,9 +2373,11 @@ void CECEditor::Layout()
 }
 
 // 参数归属线一行多高（原版实测 16px：三行行顶 117/133/149）
+// ⚠️ 不要用 EC_CODE_H 去推：代码行距第 42 轮已按实测改成 18（原为 22），
+//    而参数行高在原版里是**独立**的 16px（实测证据同上），两者不联动。
 int CECEditor::ParamLineH() const
 {
-    return EC_CODE_H * 8 / 11;
+    return 16;
 }
 
 int CECEditor::TextXOfIndent(int nIndent) const

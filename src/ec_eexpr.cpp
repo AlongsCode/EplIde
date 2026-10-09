@@ -99,12 +99,48 @@ struct ERender
     // 每条语句的起始偏移（与 .e 里的 line_offset 表交叉自检用）
     std::vector<unsigned int> stmtStarts;
 
+    // 符号名映射：`%08X|名字` 项 -> id 哈希表。
+    // ⚠️ 必须**进程级只建一次**。写成普通成员会在每个 ERender 构造时重建，而每个子程序
+    //    都要构造一个 ERender —— 精易模块 3554 个子程序 × 几千项 = 几百万次插入，
+    //    实测直接把加载卡死（界面都不出）。表内容只依赖传入的 subs，同一份工程不变。
+    // ponytail: 进程级缓存；按表大小判断是否需要重建，够用。
+    typedef CMap<unsigned int, unsigned int, CString, LPCTSTR> SymMapT;
+    static SymMapT& SymMap(const std::vector<CString>& tbl)
+    {
+        static SymMapT m;
+        static size_t nBuilt = (size_t)-1;
+        if (nBuilt != tbl.size())
+        {
+            m.RemoveAll();
+            size_t k;
+            for (k = 0; k < tbl.size(); k++)
+            {
+                int bar = tbl[k].Find(_T('|'));
+                if (bar <= 0) continue;
+                unsigned int v = (unsigned int)_tcstoul(tbl[k].Left(bar), NULL, 16);
+                if (v != 0) m[v] = tbl[k].Mid(bar + 1);
+            }
+            nBuilt = tbl.size();
+        }
+        return m;
+    }
+
+    // 按元素 id 取显示名；表里没有返回空串（调用方自己决定兜底）
+    CString SymName(unsigned int id) const
+    {
+        CString v;
+        if (SymMap(subs).Lookup(id, v)) return v;
+        return CString();
+    }
+
     ERender(const unsigned char* p, size_t n, int lib, const std::vector<CString>& subNames)
         : s(p, n), libIdx(lib), subs(subNames)
     {
         // 位置缓存初始化（-1 = 未算）。不初始化会越界。
         memoToken.assign(n + 1, -1);
         memoArgs.assign(n + 1, -1);
+        // 符号名表 `%08X|名字` 转成 id -> 名字 的映射（只建一次，见 SymMap()）。
+        SymMap(subs);
     }
 
     CString Num(double d)
@@ -313,7 +349,17 @@ CString ERender::ExprInner(unsigned char tok, int d)
     case 0x18: return CString(s.i16() != 0 ? _T("真") : _T("假"));
     case 0x19: { CString t = _T("日期("); t += Num(s.dbl()); t += _T(")"); return t; }
     case 0x1A: { CString t = _T("\""); t += Text(s.mfc()); t += _T("\""); return t; }
-    case 0x1B: { int v = s.i32(); CString t; t.Format(_T("#常量%d"), v); return t; }
+    // 0x1B = 常量引用：操作数是常量 id。
+    // ⚠️ 原版这里输出的是**常量名**（`#区块长度`），依据是 sub_4C1150 的 case 0x38 用
+    //    {id → 元素*} 表取结构体 +12 的名字（4.0 反编译实证）；常量元素在同一张表里，
+    //    所以这里先查符号表，查不到才退回 `#常量<id>` 占位。
+    case 0x1B:
+    {
+        unsigned int cv = (unsigned int)s.u32();
+        CString nm = SymName(cv);
+        if (!nm.IsEmpty()) { CString t = _T("#"); t += nm; return t; }
+        CString t; t.Format(_T("#常量%u"), cv); return t;
+    }
     case 0x1C: { short a = s.i16(); short b = s.i16(); CString t;
                  t.Format(_T("#库常量[%d,%d]"), a - 1, b - 1); return t; }
     case 0x23: { short a = s.i16(); short b = s.i16(); unsigned int c = s.u32(); CString t;
@@ -386,8 +432,8 @@ CString ERender::VarExprBody(int d)
         if (t38 != 0x3A) { CString x; x.Format(_T("?self%02X"), t38); Err(x); return x; }
         return CString(_T("<")) + Expr(s.u8(), d + 1) + _T(">");
     }
-    CString name;
-    name.Format(_T("var_%08X"), vid);
+    CString name = SymName(vid);       // 原版口径：查 {id → 元素*} 表取名字
+    if (name.IsEmpty()) name.Format(_T("var_%08X"), vid);   // 查不到才兜底
     for (int guard = 0; guard < 64; guard++)
     {
         if (s.bad || s.i >= s.n) break;
@@ -865,15 +911,22 @@ void ERender::SwitchStmt(int d, std::vector<CString>& out)
 
 std::vector<CString> EcDecodeExpression(const unsigned char* pExpr, size_t nExpr,
                                        const unsigned char* pLineOff, size_t nLineOff,
-                                       int libIdx, CString& strErr)
+                                       int libIdx, CString& strErr,
+                                       const std::vector<CString>* pSubNames)
 {
     std::vector<CString> out;
     strErr.Empty();
     (void)pLineOff; (void)nLineOff;
     if (pExpr == NULL || nExpr == 0) return out;
 
-    std::vector<CString> noSubs;
-    ERender r(pExpr, nExpr, libIdx, noSubs);
+    // ⚠️ 这里以前传的是一张**恒为空**的表（`std::vector<CString> noSubs;`），
+    //    于是 FuncCall 里 sp == -2（用户子程序调用）那个查名循环永远不执行，
+    //    正文里每个子程序调用都退化成 `用户子程序_%08X`。
+    //    原版 sub_4C1150 是拿 id 查 {id -> 元素结构*} 表、再取结构体 +12 的名字（4.0 实证），
+    //    符号名表由调用方建好传进来（见 ec_eexpr.h 的参数说明）。
+    static const std::vector<CString> s_none;
+    const std::vector<CString>& subsRef = (pSubNames != NULL) ? *pSubNames : s_none;
+    ERender r(pExpr, nExpr, libIdx, subsRef);
     r.Run(out);
 
     // ---- 交叉自检：语句起始偏移必须落在 line_offset 表里 ----

@@ -98,7 +98,15 @@ static const struct { int slot; COLORREF cr; } g_ecMeasured[] =
 
 EcDispOpt::EcDispOpt()
 {
-    nLinePitch    = 22;      // 原版代码行距 22px（shots\live2\view0.png 实测）
+    // 原版代码行距 = **18px**。第 42 轮用 4 张原版基准图交叉实测：
+    //   shots/live_flowcmd/view0.png  直方图 18×20（最干净的一张）
+    //   shots/live_acc/view0.png / shots/live_99/view0.png → 18
+    //   e.exe 4.0 与 5.9 各自打开精易模块 11.1.7.e → 都是 18
+    // 旧值 22 只由 shots/live_tabs/view0.png 支撑，而那张图**只有 3 行文本**、量不出行距，
+    // 属于误读。改前 eclone 也是 22，所以正文整体比原版"稀"。
+    // ⚠️ 参数归属线的高度**不跟着走**：原版实测 16px（见 ec_editor.cpp 的 ParamLineH），
+    //    它是独立的常量，别用 EC_CODE_H 推。
+    nLinePitch    = 18;
     nFontH        = 12;      // 原版宋体 12px（实测）
     bFlowDot      = TRUE;
     bGridDot      = FALSE;

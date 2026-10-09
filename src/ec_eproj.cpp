@@ -824,6 +824,72 @@ BOOL EcLoadEProject(LPCTSTR pszPath, CString& strOut)
         if (!base.IsEmpty()) libIdx = EcLibFindByBaseName(base);
     }
 
+    // 符号名表：`%08X|名字`，08X = 元素 id。
+    // 依据：原版渲染器 sub_4C1150 在 case 0x38（变量/子程序引用）里做的是
+    //   `sub_4C7F10(id, &结构, 0)` 查一张 **{id → 元素结构*}** 表，命中就输出结构体
+    //   **+12** 处的名字字符串（4.0 反编译实证，见 D:\EPL\_ida\NAME_MAP_FINDING.md）。
+    // 也就是说原版没有"翻译 id"的算法，只有一张覆盖**所有元素**的表：子程序 / 变量 /
+    // 常量 / 程序集 / 数据类型 / DLL 命令 …… 全都进同一张表。这里就按这个口径建。
+    // ⚠️ 在第 41 轮之前，传给 EcDecodeExpression 的是一张**恒为空**的表，
+    //    于是正文里每个子程序调用都退化成 `用户子程序_%08X`、变量退化成 `var_%08X`、
+    //    常量退化成 `#常量%d`。第 42 轮起按原版口径建全表。
+    std::vector<CString> symTable;
+
+    // 局部小工具：把一个 (id, 名字) 加进表（名字为空就跳过，避免脏项遮住有效项）
+    struct EcSymAdder
+    {
+        std::vector<CString>* pOut;
+        void Add(unsigned int id, const CString& nm)
+        {
+            if (id == 0 || nm.IsEmpty()) return;
+            CString s;
+            s.Format(_T("%08X|%s"), id, (LPCTSTR)nm);
+            pOut->push_back(s);
+        }
+    };
+    EcSymAdder add;
+    add.pOut = &symTable;
+
+    // ⚠️ VC6：循环变量作用域不隔离，这里所有变量都必须用**本文件别处没用过**的名字
+    size_t symG, symM, symA, symC, symD, symS, symV;
+    for (symG = 0; symG < prog.globals.size(); symG++)
+        add.Add(prog.globals[symG].id, EcToGbk(prog.globals[symG].name, cp));
+    for (symC = 0; symC < prog.consts.size(); symC++)
+        add.Add(prog.consts[symC].id, EcToGbk(prog.consts[symC].name, cp));
+    for (symS = 0; symS < prog.structs.size(); symS++)
+    {
+        add.Add(prog.structs[symS].id, EcToGbk(prog.structs[symS].name, cp));
+        for (symV = 0; symV < prog.structs[symS].members.size(); symV++)
+            add.Add(prog.structs[symS].members[symV].id,
+                    EcToGbk(prog.structs[symS].members[symV].name, cp));
+    }
+    for (symD = 0; symD < prog.dlls.size(); symD++)
+    {
+        add.Add(prog.dlls[symD].id, EcToGbk(prog.dlls[symD].name, cp));
+        for (symV = 0; symV < prog.dlls[symD].params.size(); symV++)
+            add.Add(prog.dlls[symD].params[symV].id,
+                    EcToGbk(prog.dlls[symD].params[symV].name, cp));
+    }
+    for (symA = 0; symA < prog.asms.size(); symA++)
+    {
+        add.Add(prog.asms[symA].id, EcToGbk(prog.asms[symA].name, cp));
+        for (symV = 0; symV < prog.asms[symA].vars.size(); symV++)
+            add.Add(prog.asms[symA].vars[symV].id,
+                    EcToGbk(prog.asms[symA].vars[symV].name, cp));
+    }
+    for (symM = 0; symM < prog.methods.size(); symM++)
+    {
+        CString sNm = EcToGbk(prog.methods[symM].name, cp);
+        add.Add(prog.methods[symM].id, EcLocalizeSubName(sNm, libIdx));
+        // 子程序的参数与局部变量也在同一张符号表里（原版表按 id 全局索引）
+        for (symV = 0; symV < prog.methods[symM].params.size(); symV++)
+            add.Add(prog.methods[symM].params[symV].id,
+                    EcToGbk(prog.methods[symM].params[symV].name, cp));
+        for (symV = 0; symV < prog.methods[symM].locals.size(); symV++)
+            add.Add(prog.methods[symM].locals[symV].id,
+                    EcToGbk(prog.methods[symM].locals[symV].name, cp));
+    }
+
     for (size_t ai = 0; ai < prog.asms.size(); ai++)
     {
         const EcAsm& a = prog.asms[ai];
@@ -831,7 +897,6 @@ BOOL EcLoadEProject(LPCTSTR pszPath, CString& strOut)
         CString line;
         line.Format(_T(".程序集 %s"), (LPCTSTR)EcToGbk(a.name, cp));
         EcLine(out, line);
-
         for (size_t vi = 0; vi < a.vars.size(); vi++)
             EcLine(out, EcVarLine(_T(".程序集变量"), a.vars[vi], cp, FALSE, libIdx, prog));
 
@@ -868,7 +933,7 @@ BOOL EcLoadEProject(LPCTSTR pszPath, CString& strOut)
                 std::vector<CString> body = EcDecodeExpression(
                     m.expr.empty() ? NULL : &m.expr[0], m.expr.size(),
                     m.lineOffset.empty() ? NULL : &m.lineOffset[0], m.lineOffset.size(),
-                    libIdx, strErr);
+                    libIdx, strErr, &symTable);
                 DWORD tB = ::GetTickCount();
                 g_dwDecodeMs += (tB - tA);
                 for (size_t bi = 0; bi < body.size(); bi++)
