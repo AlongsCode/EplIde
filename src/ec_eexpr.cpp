@@ -136,6 +136,23 @@ struct ERender
     }
 
     CString Expr(unsigned char tok, int d);
+
+    // ===== e.exe 表驱动的「推进」=====
+    // 依据（MCP 实证，见 D:\EPL\_ida\SEGMENT_SPEC.md 3.10）：
+    //   sub_4BF090@0x4BF090 = 单 token 长度表
+    //   sub_4BF500@0x4BF500 = 参数流长度 = 累加各 token 长度，遇 0x01 停，**并把 0x01 算进去**
+    //   sub_4BF920@0x4BF920 = 嵌套调用参数流起点 = mid + 16 + code_len + comment_len
+    unsigned int U32At(size_t at) const
+    {
+        if (at + 4 > s.n) return 0;
+        return (unsigned int)s.p[at] | ((unsigned int)s.p[at+1] << 8)
+             | ((unsigned int)s.p[at+2] << 16) | ((unsigned int)s.p[at+3] << 24);
+    }
+    size_t TokenLen(size_t at);        // 单 token 长度（照 sub_4BF090）
+    size_t ObjLen(size_t at);          // 对象/组子表达式长度（照 sub_4BEE30）
+    size_t CallLen(size_t at);         // 0x21/0x22 函数调用：1 + sub_4BF730(at+1)
+    size_t ArgsLen(size_t at);         // 参数流长度（照 sub_4BF500），含 0x01
+    size_t VarChainLen(size_t at);     // 0x38 <u32 id> 之后的链
     CString VarExpr(int d);
     CString VarExprBody(int d);
     CString FuncCall(int d, bool bStatement, CString* pComment);
@@ -161,37 +178,58 @@ struct ERender
     }
 };
 
+// 参数流：**推进由 e.exe 的表驱动**（sub_4BF500/090），渲染照旧，最后强制对齐游标。
+// 依据：D:\\EPL\\_ida\\SEGMENT_SPEC.md 3.10（MCP 实证）、
+//       D:\\EPL\\_ida\\lineoff_check.txt（262 文件 / 4397 子程序全部通过）。
+// 关键：**不是逐字节找 0x01**，而是按参数跳（每步 off += TokenLen），
+//       所以 token 载荷里的 0x01（如 id 0x25010049 的字节）不会被误当终结符。
+// 这样「渲染写错」不会再污染「推进」——+185 那类错位从结构上就不会发生。
 CString ERender::ArgsOf(int d)
 {
     CString joined;
-    unsigned char t = s.u8();
     std::vector<CString> args;
-    if (t == 0x36)
+    size_t start = s.i;
+
+    // ---- 1) 用 e.exe 规则算出参数流终点（权威）----
+    size_t end = start;
+    size_t bodyAt = start;
+    if (start < s.n && s.p[start] == 0x36)
     {
-        for (;;)
-        {
-            if (s.bad || s.i >= s.n) break;
-            unsigned char t2 = s.u8();
-            if (t2 == 0x01 || t2 == 0xFF) break;
-            args.push_back(Expr(t2, d + 1));
-        }
+        end = start + ArgsLen(start);       // 从 0x36 扫起，遇 0x01 停并消费它
+        bodyAt = start + 1;
     }
-    else if (t == 0x38)
+    else if (start < s.n && s.p[start] == 0x38)
     {
-        args.push_back(VarExprBody(d));        // 语句级 thiscall：参数流直接以 0x38 开头
-        for (;;)
-        {
-            if (s.bad || s.i >= s.n) break;
-            unsigned char t2 = s.u8();
-            if (t2 == 0x01 || t2 == 0xFF) break;
-            args.push_back(Expr(t2, d + 1));
-        }
+        // thiscall：先一个变量表达式（0x38 + u32 id + 链），其后仍是序列直到 0x01
+        size_t q = start + 1 + 4 + VarChainLen(start + 5);
+        end = q + ArgsLen(q);
+        bodyAt = start;
     }
     else
     {
-        CString x; x.Format(_T("?argtok%02X"), t);
+        CString x; x.Format(_T("?argtok%02X"), (start < s.n) ? s.p[start] : 0);
         Err(x);
+        return joined;
     }
+
+    // ---- 2) 渲染（游标走乱也无所谓，最后会对齐）----
+    s.i = bodyAt;
+    if (bodyAt < s.n && s.p[bodyAt] == 0x38)
+    {
+        s.i = bodyAt + 1;
+        args.push_back(VarExprBody(d));     // 语句级 thiscall 的第一个参数
+    }
+    for (int guard = 0; guard < 4096; guard++)
+    {
+        if (s.bad || s.i >= end || s.i >= s.n) break;
+        unsigned char t2 = s.u8();
+        if (t2 == 0x01) break;
+        args.push_back(Expr(t2, d + 1));
+    }
+
+    // ---- 3) 强制对齐到权威终点 ----
+    s.i = end;
+    if (s.i > s.n) s.i = s.n;
     for (size_t k = 0; k < args.size(); k++)
     {
         if (args[k].IsEmpty()) continue;
@@ -288,6 +326,107 @@ CString ERender::VarExprBody(int d)
         break;
     }
     return name;
+}
+
+// ===== e.exe 表驱动的推进实现（全部照 sub_4BF090 / sub_4BF500 / sub_4BF920）=====
+
+// 0x38 <u32 id> 之后的「链」：0x37 = 结束(1 字节)；0x39 = 成员(读 8 字节)；0x3A = 下标(1 + 子表达式)
+size_t ERender::VarChainLen(size_t at)
+{
+    size_t q = at;
+    for (int guard = 0; guard < 4096; guard++)
+    {
+        if (q >= s.n) return q - at;
+        unsigned char t = s.p[q];
+        if (t == 0x37) return (q + 1) - at;              // 链结束
+        if (t == 0x39) { q += 9; continue; }             // 成员：1 + u32 + u32
+        if (t == 0x3A) { q += 1; q += TokenLen(q); continue; }   // 下标：1 + 子表达式
+        return q - at;                                    // 未知：就此打住
+    }
+    return q - at;
+}
+
+// sub_4BF730(p+1) 的等价：函数调用表达式的长度
+//   sub_4BF920(p) = p + 16 + code_len + comment_len        （参数流起点）
+//   sub_4BF8E0(p) = sub_4BF920(p) + sub_4BEE30(参数流起点)
+//   sub_4BF730(p) = (sub_4BF8E0(p) - p) + sub_4BF500(sub_4BF8E0(p))
+size_t ERender::CallLen(size_t at)
+{
+    size_t mid = at;
+    size_t codeLen = (size_t)U32At(mid + 8);
+    size_t cmtLen  = (size_t)U32At(mid + codeLen + 12);
+    size_t args    = mid + 16 + codeLen + cmtLen;          // sub_4BF920
+    size_t objEnd  = args + ObjLen(args);                  // sub_4BF8E0
+    return (objEnd - mid) + ArgsLen(objEnd);               // sub_4BF730
+}
+
+// sub_4BEE30：对象/组子表达式长度
+size_t ERender::ObjLen(size_t at)
+{
+    if (at >= s.n) return 1;
+    if (s.p[at] == 0x36) return 1;
+    size_t v4 = 5;                                          // 反汇编：0x4BEE67 mov ebp,5
+    for (int guard = 0; guard < 4096; guard++)
+    {
+        if (at + v4 >= s.n) return (at + v4) - at;
+        unsigned char t = s.p[at + v4];
+        if (t == 0x21) { v4 += 1 + CallLen(at + v4 + 1); continue; }
+        if (t == 0x37) return v4 + 1;
+        if (t == 0x38) { v4 += ObjLen(at + v4); continue; }
+        if (t == 0x39) { v4 += 9; continue; }
+        if (t == 0x3A) { v4 += 1; continue; }
+        if (t == 0x3B) { v4 += 5; continue; }
+        return v4 + 1;                                      // 其它：保守
+    }
+    return v4;
+}
+
+// sub_4BF090：单 token 长度。**这是权威表**，不要改成自己猜。
+size_t ERender::TokenLen(size_t at)
+{
+    if (at >= s.n) return 1;
+    unsigned char t = s.p[at];
+    if (t == 0x01) return 1;                              // 终结符
+    switch (t)
+    {
+    case 0x17: case 0x19: return 9;                       // dec 23,25 -> 1 + 8(double)
+    case 0x18: return 3;                                  // dec 24 -> 1 + 2(i16)
+    case 0x1A:                                            // dec 26 -> 1 + 4 + len
+        return 5 + (size_t)U32At(at + 1);
+    case 0x1B: case 0x1E: return 5;                       // dec 27,30 -> 1 + 4
+    case 0x1C: return 5;                                  // dec 28 -> 1 + 2 + 2
+    case 0x1D:                                            // dec 29 -> sub_4BEE30(at+1) + 1
+        return 1 + ObjLen(at + 1);
+    case 0x1F:                                            // dec 31 -> 1 + 子 token 累加(到 0x20) + 1
+        {
+            size_t q = at + 1;
+            for (int guard = 0; guard < 4096 && q < s.n && s.p[q] != 0x20; guard++)
+                q += TokenLen(q);
+            if (q < s.n) q += 1;                          // 消费 0x20
+            return q - at;
+        }
+    case 0x21: case 0x22:                                 // dec 33,34 -> 1 + sub_4BF730(+1)
+        return 1 + CallLen(at + 1);
+    case 0x23:                                            // dec 35 -> 枚举：1 + 4 + 4
+        return 9;
+    default:
+        return 1;                                         // 未知：只吃 token 本身，保证前进
+    }
+}
+
+// sub_4BF500：参数流长度 = 累加各 token 长度，遇 0x01 停，**并把 0x01 算进去**（v4 = v2 + 1）
+size_t ERender::ArgsLen(size_t at)
+{
+    size_t q = at;
+    for (int guard = 0; guard < 20000; guard++)
+    {
+        if (q >= s.n) return q - at;
+        if (s.p[q] == 0x01) return (q + 1) - at;          // ★ 消费 0x01
+        size_t step = TokenLen(q);
+        if (step == 0) return (q + 1) - at;               // 防死循环
+        q += step;
+    }
+    return q - at;
 }
 
 CString ERender::FuncCall(int d, bool bStatement, CString* pComment)
@@ -431,16 +570,9 @@ void ERender::Statement(int d, std::vector<CString>& out, bool* pIsEnd, unsigned
 void ERender::IfStmt(int d, unsigned char t, std::vector<CString>& out)
 {
     CString cmt;
-    FuncCall(d, false, &cmt);                       // 块首 16B 头（名字即"如果"/"如果真"）
-    unsigned char ct = s.u8();
+    // ⚠️ 同 LoopStmt：ArgsOf 已消费参数流，不能再读标记字节。
+    FuncCall(d, false, &cmt);                       // 块首 16B 头（名字即「如果」/「如果真」）
     CString cond;
-    if (ct == 0x36)
-    {
-        unsigned char t2 = s.u8();
-        if (t2 == 0x01) cond = CString();
-        else { cond = Expr(t2, d + 1); s.u8(); }
-    }
-    else { CString x; x.Format(_T("?cond%02X"), ct); Err(x); }
 
     bool bIfTrue = (t == 0x6C);
     CString kw = bIfTrue ? _T("如果真") : _T("如果");
@@ -487,22 +619,11 @@ void ERender::IfStmt(int d, unsigned char t, std::vector<CString>& out)
 void ERender::LoopStmt(int d, std::vector<CString>& out)
 {
     CString cmt;
+    // ⚠️ FuncCall -> ArgsOf 已经消费了 0x36 标记 + 整个参数流（含 0x01）。
+    // 这里**不能再读一个字节**去当那个标记（曾经就是这个多读造成 +185 错位）。
+    // 当前游标已在参数流终点（=Bubble Sort 的 184）。
     CString head = FuncCall(d, false, &cmt);
     CString args;
-    unsigned char tt = s.u8();
-    if (tt == 0x36)
-    {
-        std::vector<CString> a;
-        for (;;)
-        {
-            if (s.bad || s.i >= s.n) break;
-            unsigned char t3 = s.u8();
-            if (t3 == 0x01) break;
-            a.push_back(Expr(t3, d + 1));
-        }
-        for (size_t k = 0; k < a.size(); k++)
-        { if (a[k].IsEmpty()) continue; if (!args.IsEmpty()) args += _T(", "); args += a[k]; }
-    }
     if (head.IsEmpty()) head = _T("循环首");
     out.push_back(head + (args.IsEmpty() ? CString(_T(" ()")) : (_T(" (") + args + _T(")"))));
 
@@ -515,10 +636,9 @@ void ERender::LoopStmt(int d, std::vector<CString>& out)
         if (s.i == before) { s.bad = true; break; }
     }
     CString cmt2;
-    CString tail = FuncCall(d, false, &cmt2);        // 0x71 + 头
+    CString tail = FuncCall(d, false, &cmt2);        // 0x71 + 头（ArgsOf 已吃掉参数流）
     CString args2;
-    unsigned char t2 = s.u8();
-    if (t2 == 0x36)
+    if (false)
     {
         std::vector<CString> a;
         for (;;)
