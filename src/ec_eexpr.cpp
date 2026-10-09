@@ -269,11 +269,15 @@ CString ERender::Expr(unsigned char tok, int d)
     T(tok, s.i - 1);
     switch (tok)
     {
-    // dec3.py: tok==22 (0x16) EMPTY_ARGUMENTS -> "空"，并且**跳过一个字节**
+    // 0x16 EMPTY_ARGUMENTS（旧注释误以为要跳 1 字节，已纠正）
     // 0xFF 是分隔/终结符（sub_4BEAE0(0xFF)==0，不属任何字面量类）。
     // 代码里它不是语句/表达式的载荷 -> 返回空且不报错。
     case 0xFF: return CString();
-    case 0x16: { s.u8(); return CString(_T("空")); }
+    // 0x16 EMPTY_ARGUMENTS：**长度 1**，不能跳字节！
+    //   实测（Find By Block.e 语句 @159）：多跳 1 会把紧跟的 0x21 吃掉，
+    //   然后读到函数调用头里的 mid 字节（报 ?tokXX，XX 就是 methodId 首字节）。
+    //   按长度 1 手算 ArgsLen 终点 = 242 == line_offset[5]，完全吻合。
+    case 0x16: return CString(_T("空"));
     case 0x3B: { int v = s.i32(); CString t; t.Format(_T("%d"), v); return t; }
     case 0x17: return Num(s.dbl());
     case 0x18: return CString(s.i16() != 0 ? _T("真") : _T("假"));
