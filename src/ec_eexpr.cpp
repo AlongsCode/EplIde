@@ -564,6 +564,14 @@ void ERender::Statement(int d, std::vector<CString>& out, bool* pIsEnd, unsigned
         if (!c.IsEmpty()) { CString p; p.Format(_T("[%04u] "), (unsigned)at); out.push_back(p + c); }
         return;
     }
+    case 0x6E:                                      // 分支（sub_4C1C30 认定它是语句头）
+    {                                               // 结构与 0x6A 相同：16 字节头 + 参数流
+        size_t at6e = s.i - 1;
+        CString cmt6e;
+        CString c6e = FuncCall(d, true, &cmt6e);
+        if (!c6e.IsEmpty()) { CString p; p.Format(_T("[%04u] "), (unsigned)at6e); out.push_back(p + c6e); }
+        return;
+    }
     case 0x6B:
     case 0x6C: IfStmt(d, t, out); return;
     case 0x6D: SwitchStmt(d, out); return;
