@@ -248,9 +248,21 @@ CString ERender::ArgsOf(int d)
     for (int guard = 0; guard < 4096; guard++)
     {
         if (s.bad || s.i >= end || s.i >= s.n) break;
+        size_t at2 = s.i;
         unsigned char t2 = s.u8();
         if (t2 == 0x01) break;
-        args.push_back(Expr(t2, d + 1));
+        // 诊断：Expr 实际前进量应等于 TokenLen(at2)
+        size_t want = TokenLen(at2);
+        CString one = Expr(t2, d + 1);
+        size_t got = s.i - at2;
+        if (got != want)
+        {
+            CString x;
+            x.Format(_T("?MISMATCH tok=%02X at=%u got=%u want=%u"), t2,
+                     (unsigned)at2, (unsigned)got, (unsigned)want);
+            Err(x);
+        }
+        args.push_back(one);
     }
 
     // ---- 3) 强制对齐到权威终点 ----
