@@ -96,6 +96,8 @@ struct ERender
     int   libIdx;
     std::vector<CString> subs;
     CString err;
+    // 每条语句的起始偏移（与 .e 里的 line_offset 表交叉自检用）
+    std::vector<unsigned int> stmtStarts;
 
     ERender(const unsigned char* p, size_t n, int lib, const std::vector<CString>& subNames)
         : s(p, n), libIdx(lib), subs(subNames) {}
@@ -375,13 +377,17 @@ void ERender::Statement(int d, std::vector<CString>& out, bool* pIsEnd, unsigned
     unsigned char t = s.u8();
     *pEndTok = t;
     T(t, s.i - 1);
+    if (stmtStarts.size() < 20000) stmtStarts.push_back((unsigned int)(s.i - 1));
 
     // 连续空语句（0x01）跳过：用循环而不是递归，避免深栈 + 死循环
     while (t == 0x01)
     {
         if (s.bad || s.i >= s.n) return;
+        size_t at2 = s.i;
         t = s.u8();
         *pEndTok = t;
+        T(t, at2);
+        if (stmtStarts.size() < 20000) stmtStarts.push_back((unsigned int)at2);
     }
     if ((t >= 0x50 && t <= 0x55) || t == 0xFF || t == 0x71 || t == 0x74) { *pIsEnd = true; return; }
 
@@ -574,6 +580,49 @@ std::vector<CString> EcDecodeExpression(const unsigned char* pExpr, size_t nExpr
     std::vector<CString> noSubs;
     ERender r(pExpr, nExpr, libIdx, noSubs);
     r.Run(out);
+
+    // ---- 交叉自检：语句起始偏移必须落在 line_offset 表里 ----
+    // 依据：line_offset 是 **e.exe 写文件时留下的行边界**（不是任何开源实现的产物），
+    // 所以"每条语句的起点都出现在 line_offset 里"是独立于 eplc 的硬断言。
+    if (pLineOff != NULL && nLineOff >= 4)
+    {
+        size_t nLo = nLineOff / 4;
+        std::vector<unsigned int> lo(nLo);
+        for (size_t k = 0; k < nLo; k++)
+            lo[k] = (unsigned int)pLineOff[k*4] | ((unsigned int)pLineOff[k*4+1] << 8)
+                  | ((unsigned int)pLineOff[k*4+2] << 16) | ((unsigned int)pLineOff[k*4+3] << 24);
+        size_t j = 0;
+        int nBad = 0;
+        CString detail;
+        for (size_t m = 0; m < r.stmtStarts.size(); m++)
+        {
+            unsigned int at = r.stmtStarts[m];
+            while (j < lo.size() && lo[j] < at) j++;
+            if (j < lo.size() && lo[j] == at) continue;
+            if (nBad < 6)
+            {
+                CString one;
+                one.Format(_T(" #%d:@%u(期望%u)"), (int)k, at,
+                           (j < lo.size()) ? lo[j] : 0xFFFFFFFFu);
+                detail += one;
+            }
+            nBad++;
+        }
+        if (nBad > 0)
+        {
+            CString one;
+            one.Format(_T("line_offset 不符 %d/%d:%s"),
+                       nBad, (int)r.stmtStarts.size(), (LPCTSTR)detail);
+            strErr = strErr.IsEmpty() ? one : (strErr + _T(" | ") + one);
+        }
+        else
+        {
+            CString one;
+            one.Format(_T("line_offset 全部命中 (%d/%d)"),
+                       (int)r.stmtStarts.size(), (int)r.stmtStarts.size());
+            strErr = strErr.IsEmpty() ? one : (strErr + _T(" | ") + one);
+        }
+    }
     // 诊断：ECLONE_TRACE_EXPR 给了路径就把 token 轨迹落盘（GBK）
     {
         TCHAR szTrace[MAX_PATH * 2];
