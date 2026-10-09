@@ -76,7 +76,7 @@ static const struct { int slot; COLORREF cr; } g_ecMeasured[] =
 {
     { EC_CS_FLOW_CMD_FG, RGB(  0,   0, 255) },   // 流程关键字 #0000FF
     { EC_CS_STRING_FG,   RGB(  0, 128, 128) },   // 字符串     #008080
-    { EC_CS_COMMENT_FG,  RGB(  0, 128,   0) },   // 注释/备注  #008000
+    { EC_CS_COMMENT_FG,  RGB(  0, 128, 128) },   // 注释/备注  #008000
     { EC_CS_OPER_FG,     RGB(  0,   0, 128) },   // 括号运算符 #000080
     { EC_CS_GRID,        RGB(136, 136, 136) },   // 表格线     #888888
     { EC_CS_LINK,        RGB(128, 128, 128) },   // 流程虚线   #808080
