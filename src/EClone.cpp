@@ -2647,10 +2647,25 @@ BOOL CECChildFrame::OnCreateClient(LPCREATESTRUCT, CCreateContext*)
             else if (_tcsicmp(szPage, _T("form"))  == 0) nPage = ECDOC_FORM;
             if (nPage >= 0)
             {
-                m_editor.SetText((nPage == ECDOC_DLL) ? EcSrcDll() : EcSrcProg());
-                m_editor.SetKind(kinds[nPage]);
-                // DumpModel 是 protected，走 ec_editor 里现成的诊断消息强制重倒一次
-                m_editor.SendMessage(EC_WM_REDUMP, 0, 0);
+                if (nPage == ECDOC_FORM)
+                {
+                    // 设计器页：不走编辑器（那条路会 SetKind(ECK_ASM) 把窗体画成
+                    // 一张空白的程序集表）。只切视图 + 选中对应的文档标签。
+                    // 依据：m_designer 视图可见时 EcCreateUnit 建出来的窗体才真正可见
+                    // （见 OpenDoc 那段 ⚠️ 说明），所以这里必须 ShowView(0)。
+                    m_tabs.SetCurSel(m_nTabOfDoc[ECDOC_FORM]);
+                    ShowView(0);
+                    // 让设计器按当前源码重建一次窗体
+                    m_designer.SendMessage(WM_SIZE, 0, 0);
+                    m_designer.Invalidate(FALSE);
+                }
+                else
+                {
+                    m_editor.SetText((nPage == ECDOC_DLL) ? EcSrcDll() : EcSrcProg());
+                    m_editor.SetKind(kinds[nPage]);
+                    // DumpModel 是 protected，走 ec_editor 里现成的诊断消息强制重倒一次
+                    m_editor.SendMessage(EC_WM_REDUMP, 0, 0);
+                }
             }
         }
     }
