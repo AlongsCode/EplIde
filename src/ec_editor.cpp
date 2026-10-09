@@ -15,6 +15,48 @@
 // 「命令根本没执行」和「执行了但结果没进显示模型」。
 void EcTrace(LPCTSTR pszFmt, ...);
 
+// 诊断：ECLONE_TRACE_COLS=<path> 时把每行的 token 分段与实际取色颜色写进文件。
+// 用途：判定「字符串/注释分支到底走没走到」，而不是从截图反推。
+// 默认关闭：生产构建里这个函数恒返回 FALSE，编译器会把下面所有 trace 分支整段删掉。
+// 要取证时把 EC_TRACE_COLS 改成 1 重新编译，并 set ECLONE_TRACE_COLS=<路径> 跑 code_shot.ps1。
+#define EC_TRACE_COLS 0
+static BOOL EcTraceCols()
+{
+#if EC_TRACE_COLS
+    static int s_n = -1;
+    if (s_n < 0)
+    {
+        TCHAR sz[MAX_PATH];
+        DWORD k = ::GetEnvironmentVariable(_T("ECLONE_TRACE_COLS"), sz, MAX_PATH);
+        s_n = (k > 0 && k < MAX_PATH) ? 1 : 0;
+    }
+    return s_n;
+#else
+    return FALSE;
+#endif
+}
+static void EcTraceWrite(const CString& s)
+{
+#if EC_TRACE_COLS
+    static FILE* f = NULL;
+    static BOOL bTried = FALSE;
+    if (!bTried)
+    {
+        bTried = TRUE;
+        TCHAR sz[MAX_PATH];
+        DWORD k = ::GetEnvironmentVariable(_T("ECLONE_TRACE_COLS"), sz, MAX_PATH);
+        if (k > 0 && k < MAX_PATH)
+            f = _tfopen(sz, _T("a"));
+    }
+    if (f == NULL) return;
+    _ftprintf(f, _T("%s"), (LPCTSTR)s);
+    fflush(f);
+#else
+    (void)s;
+    (void)&EcTraceWrite;      // 关掉 trace 时不让编译器抱怨未使用的函数
+#endif
+}
+
 // ------------------------------------------------------------------ 度量
 #define EC_FONT_H        12
 #define EC_TOP_PAD        4
@@ -25,6 +67,12 @@ void EcTrace(LPCTSTR pszFmt, ...);
 #define EC_TEXT_X        44
 #define EC_CELL_PAD       6
 #define EC_CODE_PAD       7
+// 代码行正文的纵向偏移（见 DrawCodeRow 里的实测说明：+1，不是 +3）
+#define EC_CODE_TEXT_DY   1
+// 表格行流程槽里折叠 -/+ 的竖直偏移（见 Layout 3a 的实测说明）
+#define EC_FOLD_CY        6
+// 子程序首语句那个 ↓ 的竖直偏移（见 DrawCodeRow 的实测说明）
+#define EC_DOWN_DY        2
 #define EC_INDENT_W      22
 // 原版实测（本轮用「同一份内容」对拍定死的：shots\live_tabs\view0.png = 原版打开
 // graphic.e 的 1:1 编辑器截图，1174x388；本工程用 tools\patch_sample_graphic.py 喂同一段源码）：
@@ -1341,6 +1389,20 @@ static void EcEdTime(const char* pszStage, DWORD dwStart)
 
 void CECEditor::SetText(LPCTSTR psz)
 {
+    if (EcTraceCols())
+    {
+        CString sLine;
+        int k, n = (int)_tcslen(psz);
+        sLine.Format(_T("SETTEXT n=%d : "), n);
+        for (k = 0; k < n && k < 60; k++)
+        {
+            CString t;
+            t.Format(_T("%04X "), (unsigned)(unsigned char)psz[k]);
+            sLine += t;
+        }
+        sLine += _T("\r\n");
+        EcTraceWrite(sLine);
+    }
     DWORD t0 = ::GetTickCount();
     m_lines.clear();
     CString s(psz);
@@ -2275,10 +2337,13 @@ void CECEditor::Layout()
 
     // 3) 折叠标记命中框（原版画在流程槽里，x≈21..31，与本工程的表格左边界 44 一致）
     m_foldHit.assign(m_rows.size(), CRect(0, 0, 0, 0));
+    // 3a) 折叠 -/+ 的命中框。⚠️ 竖直中心 = row.y + **6**，不是 y + h/2 (= +10)。
+    //     第 41 轮实测（patched graphic.e 1:1 对拍）：原版的横杠在 y=106、竖杠 y=102..110，
+    //     而表格数据行的 row.y = 100 -> 中心 = 100+6。用 h/2 会整体低 5px（x22..30 那 24px 差异）。
     for (r = 0; r < (int)m_rows.size(); r++)
     {
         if (m_rows[r].kind != 0 || m_rows[r].mark != ECM_FOLD) continue;
-        int cy = m_rows[r].y + m_rows[r].h / 2;
+        int cy = m_rows[r].y + EC_FOLD_CY;
         m_foldHit[r] = CRect(17, cy - 7, 37, cy + 7);
     }
 
@@ -2336,6 +2401,12 @@ BOOL CECEditor::IsCollapsed(LPCTSTR pszSub) const
         if (m_setCollapsed[i] == s) return TRUE;
     return FALSE;
 }
+
+// 表格行里流程槽那些标记（折叠 -/+）的竖直偏移：原版实测 = row.y + 6（见 Layout 3a）
+#define EC_FOLD_CY        6
+
+// 表格行里流程槽那些标记（折叠 -/+）的竖直偏移：原版实测 = row.y + 6（见 Layout 3a）
+#define EC_FOLD_CY        6
 
 // 首次交互（点鼠标 / 按键）后收掉「刚打开」的红色铅笔
 void CECEditor::ClearOpenMark()
@@ -2527,6 +2598,14 @@ void CECEditor::DrawAll(CDC& dc)
     {
         if (m_foldHit[k2].IsRectEmpty()) continue;
         CRect rcFold = m_foldHit[k2];
+        if (EcTraceCols())
+        {
+            CString sG;
+            sG.Format(_T("FOLD row=%d rect=(%d,%d,%d,%d) rowy=%d scroll=%d\r\n"),
+                      (int)k2, rcFold.left, rcFold.top, rcFold.right, rcFold.bottom,
+                      m_rows[k2].y, m_nScroll);
+            EcTraceWrite(sG);
+        }
         // 原版 1:1 实测（shots\live_fold\view_before.png）：横杠 x=22..30（9px、藏青 #000080），
         // 「+」的竖杠在 x=26（正中），整条画在白底上
         int cx = rcFold.left + 5, cy = (rcFold.top + rcFold.bottom) / 2 - m_nScroll;
@@ -2944,10 +3023,13 @@ void CECEditor::DrawCodeRow(CDC& dc, int nRow)
     // 子程序的第一条语句：流程槽里那个 ↓
     // 原版实测（shots\live_tabs\view0.png，graphic.e 1:1）：竖线在 x=9、高 7px，
     // 下面接一个「上宽 7、下尖」的实心三角（4 行），整条是藏青 #000080（= EC_C_PUNCT）
+    // ⚠️ 纵向：原版那条 ↓ 的藏青像素质心是 y102..112，而 row.y = 100 —— 起点是 **y+2**。
+    //    以前写 y+7 会整体低 5px（x6..12 那 34px 差异）。与正文的 +1 不是同一个偏移：
+    //    正文是字形的上沿，↓ 是画出来的竖线+三角，别把两者混成一个常量。
     if (row.mark == ECM_DOWN)
     {
         int ax = EC_FLOW_X(0) - 15;          // 24 - 15 = 9，与原版实测一致
-        int ty = y + 7;
+        int ty = y + EC_DOWN_DY;
         dc.FillSolidRect(ax, ty, 1, 7, EC_C_PUNCT);
         for (int k = 0; k < 4; k++)
             dc.FillSolidRect(ax - 3 + k, ty + 7 + k, 7 - 2 * k, 1, EC_C_PUNCT);
@@ -2957,15 +3039,55 @@ void CECEditor::DrawCodeRow(CDC& dc, int nRow)
     dc.SelectObject(&m_font);
     int sa = -1, sb = -1;
     SelRangeOfRow(nRow, sa, sb);
-    TokenizeDraw(dc, row.code, x, y + 3, sa, sb);
+    // ⚠️ 代码行正文的纵向偏移 = **+1**（不是 +3）。第 41 轮用带模型的 1:1 对位实测出来的：
+    //    同一个 `.子程序` 行，表格渲染器（row.y=25）打出来是 y30..41 与原版**逐像素相同**；
+    //    而代码行（row.y=100）用 +3 打出来是 y103..114，原版是 y101..112 —— 正好低 2px。
+    //    改 +1 之后两者一致。别再凭"看起来差不多"改回去：判据是
+    //    `python -B D:\EPL\_ida\_align2.py`（逐行比较 orig/mine 的 ink 上下沿）。
+    TokenizeDraw(dc, row.code, x, y + EC_CODE_TEXT_DY, sa, sb);
 }
 
 // 词法着色：逐 run 画。nSelA/nSelB = 本行落在选区里的字节范围（-1 = 没有选区），
 // 落在选区里的那一段用「选区底 + 白字」（原版实测，见 EC_C_SELBG）。
+// 诊断：ECLONE_TRACE_COLS=<path> 时把每行的 token 分段与实际取色颜色写进文件。
+// 用途：判定「字符串/注释分支到底走没走到」，而不是从截图反推。（全 ASCII 十六进制）
+// ------------------------------------------------------------------ 输出文字
+// 原版代码区正文是用 **ExtTextOutA(hdc, x, y, ETO_CLIPPED=4, &rect, s, -1, NULL)**
+// 画出来的（sub_4CAC80 @0x4CB2BD，第 41 轮 IDA 实证）。本工程原来用 CDC::TextOut，
+// 两者在「下划线一带被相邻字形吃掉」这类细节上会差 1px（正是 y41 / y91 那几十像素）。
+// 统一走同一个 API，参数照原版抄。nCount 给 -1（字符串以 0 结尾）在 MBCS 下等于 strlen。
+// ⚠️ 不能用 `_T("%s")` 那类宽串：本工程是 MBCS（TCHAR=char），但 ExtTextOut 有 A/W 两版，
+//    显式选 ExtTextOutA + 窄指针最稳（HANDOFF §3 坑 5 记过宽窄串混用的坑）。
+static void EcOutText(CDC& dc, int x, int y, const CString& s, const CRect& rcClip)
+{
+    if (s.IsEmpty()) return;
+    CRect rc(rcClip);
+    ::ExtTextOutA(dc.GetSafeHdc(), x, y, ETO_CLIPPED, &rc,
+                  (LPCSTR)(LPCTSTR)s, (UINT)s.GetLength(), NULL);
+}
+
 void CECEditor::TokenizeDraw(CDC& dc, const CString& s, int x, int y, int nSelA, int nSelB)
 {
     int n = s.GetLength();
     int i = 0;
+    CRect rcClip;
+    GetClientRect(&rcClip);
+    CString sTrace;
+    if (EcTraceCols())
+    {
+        sTrace.Format(_T("TOK x=%d y=%d [%s] ->"), x, y, (LPCTSTR)s);
+        EcTraceWrite(sTrace);
+        CString sHex;
+        int k;
+        for (k = 0; k < n && k < 40; k++)
+        {
+            CString t;
+            t.Format(_T("%04X "), (unsigned)(unsigned char)s[k]);
+            sHex += t;
+        }
+        sTrace.Format(_T("UNITS n=%d : %s\r\n"), n, (LPCTSTR)sHex);
+        EcTraceWrite(sTrace);
+    }
     while (i < n)
     {
         unsigned char c = (unsigned char)s[i];
@@ -2997,6 +3119,15 @@ void CECEditor::TokenizeDraw(CDC& dc, const CString& s, int x, int y, int nSelA,
             i += (i + 1 < n) ? 2 : 1;
             cr = EC_C_PUNCT;
         }
+        // ⚠️ 第 41 轮的根因（值 474px 的 #008080 全缺）：GBK 前半角标点被上面的名字分支吃掉。
+        //    原因：上面两支写的是 `c == 0xA1`，而 `char` 在 x86 上**有符号**，
+        //    `(char)0xA1 == 0xA1` 恒为假（probe 实测 char is signed:1）——但 `c` 是
+        //    unsigned char，所以那个判断本身没问题；真正的问题是**名字分支**的条件
+        //    `c >= 0x81` 对 0xA1/0xA3 也成立，于是 `信息框（“…”）` 里那个全角左括号
+        //    被当成名字的开头、一路吃到行尾 —— 整行变成一个 token，字符串分支永远走不到。
+        //    判据与 EcIdentHead（本文件上面同一个规则）一致：**0xA1/0xA3 两区一律不算名字**。
+        //    修法：名字循环遇到非 0x81..0xFE 前导、或全角标点前导时立即停。后面由名字循环
+        //    外的 `i += 2` 兜底（+1 次 main loop 之后的推进），不会死循环。
         else if (strchr("()[]{}.,;:=+-*/<>%&|!? \t", c) != NULL && c < 0x80)
         {
             i++;
@@ -3018,9 +3149,11 @@ void CECEditor::TokenizeDraw(CDC& dc, const CString& s, int x, int y, int nSelA,
             {
                 unsigned char d = (unsigned char)s[i];
                 if ((d >= 'A' && d <= 'Z') || (d >= 'a' && d <= 'z') ||
-                    (d >= '0' && d <= '9') || d == '_') i++;
-                else if (d >= 0x81 && i + 1 < n) i += 2;
-                else break;
+                    (d >= '0' && d <= '9') || d == '_') { i++; continue; }
+                // 见上面那段 ⚠️：全角标点区 0xA1/0xA3 引导的字节**不是名字**（判据与
+                // EcIdentHead 完全一致），遇到就停，交给 main loop 的两个分支处理。
+                if (d >= 0x81 && i + 1 < n && d != 0xA1 && d != 0xA3) { i += 2; continue; }
+                break;
             }
             tok = s.Mid(start, i - start);
             cr = EcClassify(tok);
@@ -3033,6 +3166,12 @@ void CECEditor::TokenizeDraw(CDC& dc, const CString& s, int x, int y, int nSelA,
 
         CString run = s.Mid(start, i - start);
         if (run.IsEmpty()) break;
+        if (EcTraceCols())
+        {
+            sTrace.Format(_T("  run[%d,%d) cr=%06X [%s]\r\n"), start, i,
+                          (unsigned)(cr & 0x00FFFFFF), (LPCTSTR)run);
+            EcTraceWrite(sTrace);
+        }
         // 与本行选区求交，分成「选区前 / 选区内 / 选区后」三段分别上色
         if (nSelA >= 0 && nSelB > nSelA && start < nSelB && i > nSelA)
         {
@@ -3042,27 +3181,27 @@ void CECEditor::TokenizeDraw(CDC& dc, const CString& s, int x, int y, int nSelA,
             {
                 CString pre = s.Mid(start, sa - start);
                 dc.SetTextColor(cr);
-                dc.TextOut(x, y, pre);
+                EcOutText(dc, x, y, pre, rcClip);
                 x += dc.GetTextExtent(pre).cx;
             }
             CString mid = s.Mid(sa, sb - sa);
             if (!mid.IsEmpty())
             {
                 dc.SetTextColor(EC_C_SELFG);
-                dc.TextOut(x, y, mid);
+                EcOutText(dc, x, y, mid, rcClip);
                 x += dc.GetTextExtent(mid).cx;
             }
             if (sb < i)
             {
                 CString post = s.Mid(sb, i - sb);
                 dc.SetTextColor(cr);
-                dc.TextOut(x, y, post);
+                EcOutText(dc, x, y, post, rcClip);
                 x += dc.GetTextExtent(post).cx;
             }
             continue;
         }
         dc.SetTextColor(cr);
-        dc.TextOut(x, y, run);
+        EcOutText(dc, x, y, run, rcClip);
         x += dc.GetTextExtent(run).cx;
     }
 }
@@ -3714,6 +3853,11 @@ int CECEditor::RowOfCaret() const
 // 文档刚打开时流程槽里的红色铅笔（14x14，位置：x=3，行内竖直居中）
 void CECEditor::DrawOpenMark(CDC& dc)
 {
+    // ⚠️ 只在**本编辑器有焦点**时画。原版也一样（shots\live_tabs\view0.png 里没有这个铅笔，
+    //    因为那次截图时插入点不在编辑器里）。判据：tools\code_shot.ps1 会先发 WM_KILLFOCUS
+    //    再 PrintWindow，此时本工程以前照样把铅笔画出来 -> 流程槽里凭空多 65px 黑色
+    //    （第 41 轮绘制对拍里 x3..16 y7..20 那一条）。别再无条件画。
+    if (::GetFocus() != m_hWnd) return;
     int r = RowOfCaret();
     if (r < 0) return;
     int y = m_rows[r].y - m_nScroll + (m_rows[r].h - EC_PEN_H) / 2;

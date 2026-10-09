@@ -52,13 +52,21 @@ def main():
         r = run([PY, os.path.join(TOOLS, "patch_sample_graphic.py")])
         if r.returncode != 0:
             return 1
+        exe = os.path.join(ROOT, "bin", "EClone.exe")
+        before = os.path.getmtime(exe) if os.path.exists(exe) else 0
         r = run(["cmd", "/c", "build.bat"], cwd=ROOT)
-        if r.returncode != 0:
+        # A failed build leaves the previous exe in place, so every later screenshot
+        # would silently come from a STALE binary (round 41 lost a whole cycle to this).
+        # Refuse to continue unless the build reported OK and really relinked.
+        if r.returncode != 0 or "BUILD OK" not in (r.stdout or ""):
+            print("[FAIL] build.bat failed -- refusing to diff a stale exe")
+            return 1
+        if os.path.getmtime(exe) <= before:
+            print("[FAIL] bin\\EClone.exe was not relinked -- refusing to diff a stale exe")
             return 1
         r = run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
                  "-File", os.path.join(TOOLS, "code_shot.ps1"),
-                 "-Exe", os.path.join(ROOT, "bin", "EClone.exe"),
-                 "-OutDir", SHOTS])
+                 "-Exe", exe, "-OutDir", SHOTS])
         if not os.path.exists(mine):
             print("[FAIL] %s was not produced" % mine)
             return 1
