@@ -155,6 +155,7 @@ struct ERender
     }
 
     CString Expr(unsigned char tok, int d);
+    CString ExprInner(unsigned char tok, int d);
 
     // ===== e.exe 表驱动的「推进」=====
     // 依据（MCP 实证，见 D:\EPL\_ida\SEGMENT_SPEC.md 3.10）：
@@ -277,7 +278,23 @@ CString ERender::ArgsOf(int d)
     return joined;
 }
 
+// 推进与渲染解耦：**推进以 TokenLen 为准**，渲染只产文本。
+// 依据：TokenLen 已被 ground-truth walker 验证（262 文件 / 4397 子程序 100%），
+//   而渲染路径的消费量不可靠（实测 tok=1F 跑飞 199450 字节 / tok=21 少 5 字节）。
 CString ERender::Expr(unsigned char tok, int d)
+{
+    size_t at = s.i - 1;                 // 调用方刚读掉的那个 token 位置
+    CString r = ExprInner(tok, d);
+    size_t want = TokenLen(at);
+    // ⚠️ **只前进、不回退**：TokenLen 对某些 token 没有专门分支
+    //   （如 0x38 走 default = 1），而 ExprInner(0x38) 合法地消费 1+4+链。
+    //   强制对齐会把它回退 -> 实测必测干净率 99.92% -> 88.49%。
+    //   只前进则只修正「渲染消费得比长度表少」的情形（如 0x21 少 5~6 字节）。
+    if (at + want <= s.n && s.i < at + want) s.i = at + want;
+    return r;
+}
+
+CString ERender::ExprInner(unsigned char tok, int d)
 {
     T(tok, s.i - 1);
     switch (tok)
