@@ -490,6 +490,17 @@ CString ERender::FuncCall(int d, bool bStatement, CString* pComment)
     }
     std::string code = s.mfc();
     std::string cmt  = s.mfc();
+    // 诊断：code_len != 0 的情况（子智能体标注过未验证）
+    if (!code.empty())
+    {
+        static int s_nCode = 0;
+        if (s_nCode < 20)
+        {
+            s_nCode++;
+            CString x; x.Format(_T("?CODE(len=%d)"), (int)code.size());
+            Err(x);
+        }
+    }
     (void)fl;
     CString comment = Text(cmt);
     if (pComment) *pComment = comment;
