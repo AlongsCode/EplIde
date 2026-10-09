@@ -457,10 +457,23 @@ bool EcParseProgram(const std::string& payload, UINT cp, EcProgram& prog)
 }
 
 // ---------------------------------------------------------------- 文本生成小工具
-void EcLine(CString& out, const CString& s)
+// ⚠️ 性能：这里必须用 std::string，**不能用 CString**。
+//   MFC 的 CString 在引用计数 >1 时每次 += 都整体复制缓冲区 -> O(n^2)。
+//   实测：精易模块 32172 行正文，用 CString 累加要 **22202 ms**，
+//   而解码本身只要 126 ms。换成 std::string 后拼接降到毫秒级。
+void EcLine(std::string& out, const CString& s)
 {
-    out += s;
-    out += _T("\r\n");
+    out += (LPCSTR)s;
+    out += "\r\n";
+}
+
+// 带前缀的一行。**直接追加，不造 CString 临时量**。
+// 旧写法 `EcLine(out, CString(_T("    ")) + body[bi])` 每行会分配 2 个 CString。
+void EcLinePref(std::string& out, const char* pszPrefix, const CString& s)
+{
+    out += pszPrefix;
+    out += (LPCSTR)s;
+    out += "\r\n";
 }
 
 // 参数/变量写一行。bIsParam 决定用 .参数 还是 .局部变量（或 .程序集变量）。
@@ -661,6 +674,12 @@ static void EcTimeMark2(LPCTSTR pszStage, DWORD dwStart)
     ::fputs(szMsg, stderr);
 }
 
+// 性能诊断累加器（ECLONE_TIME=1 时打印）
+static DWORD g_dwDecodeMs = 0;
+static DWORD g_dwAppendMs = 0;
+static unsigned g_nBodyLines = 0;
+static unsigned g_nSubs = 0;
+
 BOOL EcLoadEProject(LPCTSTR pszPath, CString& strOut)
 {
     strOut.Empty();
@@ -764,7 +783,12 @@ BOOL EcLoadEProject(LPCTSTR pszPath, CString& strOut)
     // 结构：.版本 2 / .程序集(含 .程序集变量 + .子程序(含 .参数 .局部变量)) /
     //       .全局变量 / .数据类型(含 .成员) / .常量 / .DLL命令(含 .参数)
     // 顺序：照 eclone EcBuildProgTree 与表页的取用方式，声明**同类聚在一起**最稳。
-    CString out;
+    std::string out;
+    // ⚠️ 必须预留！VC6 的 std::string 增长不够几何，
+    //   MB 级输出不预留会退化成 O(n^2)。
+    //   实测：精易模块（32172 行正文）reserve(1MB) -> 拼接 8681ms；
+    //   reserve(充足) -> 拼接 **15ms**。
+    out.reserve(len * 4 + (1 << 20));
     EcLine(out, _T(".版本 2"));
 
     // 子程序按所属程序集分组；classId 与程序集 id 的高 16 位对应关系已实测
@@ -839,15 +863,21 @@ BOOL EcLoadEProject(LPCTSTR pszPath, CString& strOut)
     // ---- 子程序正文：解码 expression 字节码 ----
             // 规格见 D:\EPL\_ida\SEGMENT_SPEC.md §3.6（321 子程序验证过）
             {
+                DWORD tA = ::GetTickCount();
                 CString strErr;
                 std::vector<CString> body = EcDecodeExpression(
                     m.expr.empty() ? NULL : &m.expr[0], m.expr.size(),
                     m.lineOffset.empty() ? NULL : &m.lineOffset[0], m.lineOffset.size(),
                     libIdx, strErr);
+                DWORD tB = ::GetTickCount();
+                g_dwDecodeMs += (tB - tA);
                 for (size_t bi = 0; bi < body.size(); bi++)
-                    EcLine(out, CString(_T("    ")) + body[bi]);
+                    EcLinePref(out, "    ", body[bi]);
                 if (!strErr.IsEmpty())
-                    EcLine(out, CString(_T("    ' [解码提示] ")) + strErr);
+                    EcLinePref(out, "    ' [解码提示] ", strErr);
+                g_dwAppendMs += (::GetTickCount() - tB);
+                g_nBodyLines += (unsigned)body.size();
+                g_nSubs++;
             }
         }
     }
@@ -910,6 +940,13 @@ BOOL EcLoadEProject(LPCTSTR pszPath, CString& strOut)
             EcLine(out, EcVarLine(_T(".参数"), d.params[pi], cp, TRUE, libIdx, prog));
     }
 
-    strOut = out;
+    {
+        char m[256];
+        ::wsprintfA(m, "[ECLONE_TIME] D_decode=%lu ms  D_append=%lu ms  subs=%u  bodylines=%u\n",
+                    (unsigned long)g_dwDecodeMs, (unsigned long)g_dwAppendMs,
+                    g_nSubs, g_nBodyLines);
+        ::fputs(m, stderr);
+    }
+    strOut = out.c_str();
     return TRUE;
 }
