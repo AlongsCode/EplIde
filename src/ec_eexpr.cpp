@@ -128,8 +128,22 @@ struct ERender
 
     // 轨迹（诊断用）：每次"进入某个 token"时记一条 "tok@偏移"
     std::vector<CString> trace;
+    // ⚠️ 轨迹开关：**没设 ECLONE_TRACE_EXPR 时必须为 false**。
+    //    曾经无条件记录 -> 每个 token 构造一个 CString + 堆分配，
+    //    3554 个子程序（精易模块 4.9MB）下加载 >120s。
+    static bool TraceOn()
+    {
+        static int on = -1;
+        if (on < 0)
+        {
+            TCHAR sz[MAX_PATH * 2];
+            on = (::GetEnvironmentVariable(_T("ECLONE_TRACE_EXPR"), sz, MAX_PATH * 2) > 0) ? 1 : 0;
+        }
+        return on == 1;
+    }
     void T(unsigned char tok, size_t at)
     {
+        if (!TraceOn()) return;
         if (trace.size() > 40000) return;
         CString x; x.Format(_T("%02X@%u"), tok, (unsigned)at);
         trace.push_back(x);
@@ -438,7 +452,7 @@ CString ERender::FuncCall(int d, bool bStatement, CString* pComment)
     unsigned int mid = s.u32();
     short sp = s.i16();
     short fl = s.i16();
-    if (trace.size() < 40000)
+    if (TraceOn() && trace.size() < 40000)
     {
         CString x; x.Format(_T("HDR@%u mid=%u sp=%d fl=%d"), (unsigned)hdr, mid, (int)sp, (int)fl);
         trace.push_back(x);
@@ -450,7 +464,7 @@ CString ERender::FuncCall(int d, bool bStatement, CString* pComment)
     if (pComment) *pComment = comment;
 
     CString argStr = ArgsOf(d);
-    if (trace.size() < 40000)
+    if (TraceOn() && trace.size() < 40000)
     {
         CString x; x.Format(_T("  END@%u (args=%s)"), (unsigned)s.i, (LPCTSTR)argStr);
         trace.push_back(x);

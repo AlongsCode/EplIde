@@ -23,6 +23,22 @@
 #include "ec_syscfg.h"
 #include "ec_eproj.h"
 
+// ECLONE_TIME=1 时把各阶段耗时打到 stderr。
+// 用途：定位「加载 .e 慢」到底慢在读文件/解码，还是在显示/建树。
+// 依据：原版 e.exe 加载 4.9MB 的 精易模块.e 很快 -> 它应该是**惰性**的
+//       （只解码当前显示的子程序），而 eclone 是**急切**的（全部解码成文本）。
+static void EcTimeMark(LPCTSTR pszStage, DWORD dwStart)
+{
+    char szOn[8];
+    if (::GetEnvironmentVariableA("ECLONE_TIME", szOn, sizeof(szOn)) == 0) return;
+    char szMsg[256];
+    ::wsprintfA(szMsg, "[ECLONE_TIME] %ls : %lu ms\n", pszStage,
+                (unsigned long)(::GetTickCount() - dwStart));
+    ::OutputDebugStringA(szMsg);
+    ::fputs(szMsg, stderr);
+}
+
+
 // 支持库树选中 -> 主框架状态栏显示提示（原版就是这个行为：提示写在 msctls_statusbar32 里）
 #define EC_WM_HINT      (WM_USER + 111)
 // 「工作夹->程序」树选中 -> MDI 子窗口切到对应文档页（分页导航）
@@ -155,14 +171,15 @@ static BOOL g_bExitAfterInit = FALSE;   // 命令行带 exit 时，建完窗口�
 //    子程序正文（可执行语句）还没生成 —— .e 里它是字节码，语义未解，见 HANDOFF §5.3。
 
 // 调试用：把 .e 生成的文本原样落盘（ECLONE_DUMP_EPROJ=<路径>），便于逐字核对
-static void EcDumpEProjectIfAsked(LPCTSTR pszPath)
+static void EcDumpEProjectIfAsked(LPCTSTR pszPath, const CString& strText)
 {
     TCHAR szOut[MAX_PATH * 2];
     if (::GetEnvironmentVariable(_T("ECLONE_DUMP_EPROJ"), szOut, MAX_PATH * 2) <= 0)
         return;
-    CString s;
-    if (!EcLoadEProject(pszPath, s))
-        s = _T("<<EcLoadEProject failed>>");
+    // ⚠️ 不要在这里再调 EcLoadEProject！
+    //   主流程紧接着会再调一次 -> 整个解析跑两遍（曾经就是这样）。
+    //   现在由调用方先解析，再把文本传进来。
+    const CString& s = strText;
     CStdioFile f;
     CFileException e;
     if (!f.Open(szOut, CFile::modeCreate | CFile::modeWrite | CFile::typeBinary, &e))
@@ -3064,11 +3081,14 @@ BOOL CECloneApp::InitInstance()
         CString strE;
         if (EcFindEArg(strE))
         {
-            EcDumpEProjectIfAsked(strE);
+            DWORD dwT0 = ::GetTickCount();
             if (EcIsEFile(strE) && EcLoadEProject(strE, g_strEProgram))
             {
                 g_bEProject = TRUE;
             }
+            EcTimeMark(_T("A. 解析 .e（读文件 + 译码全部子程序正文）"), dwT0);
+            if (g_bEProject)
+                EcDumpEProjectIfAsked(strE, g_strEProgram);
             else
             {
                 CString msg;
