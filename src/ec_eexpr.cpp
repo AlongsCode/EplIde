@@ -321,17 +321,30 @@ CString ERender::ExprInner(unsigned char tok, int d)
     case 0x1E: { int v = s.i32(); CString t; t.Format(_T("&子程序%d"), v); return t; }
     case 0x1F:
     {
+        // 集合字面量（如 `置入代码 ({232, 0, 0, ...})`）。
+        // ★ 照 sub_4BF090 的 case 31：**元素用 TokenLen 步进**，直到遇 0x20，
+        //   最后把 0x20 也算进去。不能靠 Expr 的消费量步进
+        //   （实测会被带过 0x20 -> 跑飞 got=199450 want=36866）。
         CString r = _T("{");
         bool first = true;
-        for (;;)
+        size_t q = s.i;
+        for (int guard = 0; guard < 20000000; guard++)     // 字节集可达十万元素，守卫要大
         {
-            if (s.bad || s.i >= s.n) break;
-            unsigned char t2 = s.u8();
-            if (t2 == 0x20) break;
-            if (!first) r += _T(", ");
-            r += Expr(t2, d + 1);
-            first = false;
+            if (s.bad || q >= s.n || s.p[q] == 0x20) break;
+            size_t before = q;
+            s.i = q + 1;                               // 渲染前把游标摆到元素位置
+            CString one = Expr(s.p[q], d + 1);
+            if (!one.IsEmpty())
+            {
+                if (!first) r += _T(", ");
+                r += one;
+                first = false;
+            }
+            q += TokenLen(before);                     // 推进以 TokenLen 为准
+            if (q <= before) break;
         }
+        if (q < s.n) q += 1;                           // 消费 0x20
+        s.i = q;
         r += _T("}");
         return r;
     }
@@ -480,8 +493,11 @@ size_t ERender::TokenLenRaw(size_t at)
         return 1 + ObjLen(at + 1);
     case 0x1F:                                            // dec 31 -> 1 + 子 token 累加(到 0x20) + 1
         {
+            // ⚠️ 字节集可以**极大**（置入代码 的机器码可达数百 KB
+            //   -> 元素数十万），守卫不能小（旧值 4096 会中途截断，
+            //   返回假的长度 36866，而真正的 0x20 还在更远处）。
             size_t q = at + 1;
-            for (int guard = 0; guard < 4096 && q < s.n && s.p[q] != 0x20; guard++)
+            while (q < s.n && s.p[q] != 0x20)
                 q += TokenLen(q);
             if (q < s.n) q += 1;                          // 消费 0x20
             return q - at;
