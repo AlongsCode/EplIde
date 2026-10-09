@@ -542,6 +542,9 @@ void ERender::Statement(int d, std::vector<CString>& out, bool* pIsEnd, unsigned
         T(t, at2);
         if (stmtStarts.size() < 20000) stmtStarts.push_back((unsigned int)at2);
     }
+    // 块结束/分支标记。
+    // ⚠️ 实测：把 0x72/0x73/0x75 加进来会让尾部语句丢失（更糟）—— 这里保持原样，
+    //    剩下的 ?stmt73@738 留待下一轮用 e.exe 的块配对语义（sub_4C1B10）正确处理。
     if ((t >= 0x50 && t <= 0x55) || t == 0xFF || t == 0x71 || t == 0x74) { *pIsEnd = true; return; }
 
     switch (t)
@@ -585,7 +588,9 @@ void ERender::IfStmt(int d, unsigned char t, std::vector<CString>& out)
             size_t before = s.i;
             bool isEnd = false; unsigned char et = 0;
             Statement(d + 1, out, &isEnd, &et);
-            if (isEnd) { if (et == 0x52 || et == 0x50) EndHeader(d, _T("")); break; }
+            // 0x50..0x55 长度都是 1（sub_4BEAE0 归为 class 5，sub_4C1C30 返回 false）
+            // —— **没有 16 字节头**，不能调 EndHeader（曾经就是这里每次多读 16 字节）。
+            if (isEnd) break;
             if (s.i == before) { s.bad = true; break; }
         }
         out.push_back(_T("如果真结束 ()"));
@@ -600,7 +605,7 @@ void ERender::IfStmt(int d, unsigned char t, std::vector<CString>& out)
         if (!isEnd) { if (s.i == before) { s.bad = true; break; } continue; }
         if (et == 0x51) { out.push_back(_T("如果结束 ()")); return; }
         if (et != 0x50) break;
-        EndHeader(d, _T(""));                        // 0x50 = 否则（带头）
+        // 0x50（否则）也是长度 1、无头（同 sub_4C1C30 结论）——不能调 EndHeader
         out.push_back(_T("否则"));
         for (int g2 = 0; g2 < 5000 && !s.bad && s.i < s.n; g2++)
         {
