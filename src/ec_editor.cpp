@@ -73,6 +73,18 @@ static void EcTraceWrite(const CString& s)
 #define EC_FOLD_CY        6
 // 子程序首语句那个 ↓ 的竖直偏移（见 DrawCodeRow 的实测说明）
 #define EC_DOWN_DY        2
+// ★ 代码行正文的字体 pitch/family。**从运行期读出来的**（第 41 轮）：
+//   写了个 PowerShell 探针去问原版 e.exe 自己 —— 枚举它的窗口树，
+//   对每个窗口发 WM_GETFONT 再 GetObjectA(hFont, LOGFONTA)，结果：
+//     源码编辑器（Tab/TreeView/Static 那条链）= 宋体 SimSun, lfHeight=-12,
+//       lfWeight=400, lfCharSet=134(GB2312), **lfPitchAndFamily=0x02**
+//     (0x02 = VARIABLE_PITCH | FF_SWISS)
+//   而本工程以前写的是 `FIXED_PITCH | FF_MODERN`(=0x31) —— 于是 Windows 交回来的是
+//   另一个宋体变体（NSimSun），下划线一带的衔接与相邻字形宽度都不同：
+//   y41/y91 两处下划线，原版是断续笔画（`50-50 53-53 60-60 ...`），
+//   本工程是一条连续实线（`50-133` 一整段），合计多出约 +64px 藏青 #000080。
+//   ⚠️ 表格字体**不要**跟着改（它已逐像素对，见 CreateFont 那段的注释）。
+#define EC_EDITOR_PITCH   (VARIABLE_PITCH | FF_SWISS)
 #define EC_INDENT_W      22
 // 原版实测（本轮用「同一份内容」对拍定死的：shots\live_tabs\view0.png = 原版打开
 // graphic.e 的 1:1 编辑器截图，1174x388；本工程用 tools\patch_sample_graphic.py 喂同一段源码）：
@@ -575,15 +587,18 @@ void CECEditor::ApplyTheme()
         nFontH = 12;
 
     // 原版代码编辑器用的就是 12px 宋体（实测 CJK 步进 12px、ASCII 6px）
+    // ★ 第 41 轮：字体参数**从运行期读出来的**，不是猜的 —— 见下面 EC_EDITOR_PITCH。
     m_font.DeleteObject();
     m_fontU.DeleteObject();
     m_fontTable.DeleteObject();
     m_font.CreateFont(-nFontH, 0, 0, 0, FW_NORMAL, 0, 0, 0, GB2312_CHARSET,
                       OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
-                      FIXED_PITCH | FF_MODERN, _T("宋体"));
+                      EC_EDITOR_PITCH, _T("宋体"));
     m_fontU.CreateFont(-nFontH, 0, 0, 0, FW_NORMAL, 0, TRUE, 0, GB2312_CHARSET,
                        OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
-                       FIXED_PITCH | FF_MODERN, _T("宋体"));
+                       EC_EDITOR_PITCH, _T("宋体"));
+    // ⚠️ 表格字体**故意**保持 FIXED_PITCH：它已经是逐像素对的（第 41 轮实测
+    //    `.子程序 取显示文本, 文本型` 那一行与原版 ink 完全一致），别顺手一起改。
     m_fontTable.CreateFont(-nFontH, 0, 0, 0, FW_NORMAL, 0, 0, 0, GB2312_CHARSET,
                            OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
                            FIXED_PITCH | FF_MODERN, _T("宋体"));
