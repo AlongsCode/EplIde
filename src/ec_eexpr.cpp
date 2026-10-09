@@ -639,8 +639,14 @@ void ERender::IfStmt(int d, unsigned char t, std::vector<CString>& out)
             size_t before = s.i;
             bool isEnd2 = false; unsigned char et2 = 0;
             Statement(d + 1, out, &isEnd2, &et2);
-            if (isEnd2) break;
-            if (s.i == before) { s.bad = true; break; }
+            if (!isEnd2) { if (s.i == before) { s.bad = true; break; } continue; }
+            // ⚠️ 与外层循环同样的规则：
+            //   0x51..0x55 是「块体结束」标记 -> 只消费、不结束本块；
+            //   0x72/0x73 才是闭块符（已被 Statement 消费）。
+            //   曾经这里无条件 break，把 0x72@970 留给外层 LoopStmt，
+            //   导致它的 tail FuncCall 落在 0x6a@971 上（token 字节被当 mid）。
+            if (et2 >= 0x51 && et2 <= 0x55) continue;
+            break;
         }
         out.push_back(_T("如果结束 ()"));
         return;
@@ -664,7 +670,16 @@ void ERender::LoopStmt(int d, std::vector<CString>& out)
         size_t before = s.i;
         bool isEnd = false; unsigned char et = 0;
         Statement(d + 1, out, &isEnd, &et);
-        if (isEnd) break;
+        // ⚠️ 只有 0x55（循环体结束）才结束本循环；
+        //   0x51..0x54 / 0x72..0x74 是内层块泄露出来的标记 -> 只消费。
+        //   曾经「任何 isEnd 都 break」，导致 tail 的 FuncCall 落在一个 token 字节上
+        //   （mid 读成了该 token 的值，实测形如 ?stmt34/?stmtA2/?stmt2B）。
+        if (isEnd)
+        {
+            if (et == 0x55 || et == 0x71) break;
+            if (s.i == before) { s.bad = true; break; }
+            continue;
+        }
         if (s.i == before) { s.bad = true; break; }
     }
     CString cmt2;
