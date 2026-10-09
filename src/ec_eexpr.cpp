@@ -124,6 +124,15 @@ struct ERender
         if (err.GetLength() < 200) err += x;
     }
 
+    // 轨迹（诊断用）：每次"进入某个 token"时记一条 "tok@偏移"
+    std::vector<CString> trace;
+    void T(unsigned char tok, size_t at)
+    {
+        if (trace.size() > 40000) return;
+        CString x; x.Format(_T("%02X@%u"), tok, (unsigned)at);
+        trace.push_back(x);
+    }
+
     CString Expr(unsigned char tok, int d);
     CString VarExpr(int d);
     CString VarExprBody(int d);
@@ -192,6 +201,7 @@ CString ERender::ArgsOf(int d)
 
 CString ERender::Expr(unsigned char tok, int d)
 {
+    T(tok, s.i - 1);
     switch (tok)
     {
     // dec3.py: tok==22 (0x16) EMPTY_ARGUMENTS -> "空"，并且**跳过一个字节**
@@ -280,9 +290,15 @@ CString ERender::VarExprBody(int d)
 
 CString ERender::FuncCall(int d, bool bStatement, CString* pComment)
 {
+    size_t hdr = s.i;
     unsigned int mid = s.u32();
     short sp = s.i16();
     short fl = s.i16();
+    if (trace.size() < 40000)
+    {
+        CString x; x.Format(_T("HDR@%u mid=%u sp=%d fl=%d"), (unsigned)hdr, mid, (int)sp, (int)fl);
+        trace.push_back(x);
+    }
     std::string code = s.mfc();
     std::string cmt  = s.mfc();
     (void)fl;
@@ -290,6 +306,11 @@ CString ERender::FuncCall(int d, bool bStatement, CString* pComment)
     if (pComment) *pComment = comment;
 
     CString argStr = ArgsOf(d);
+    if (trace.size() < 40000)
+    {
+        CString x; x.Format(_T("  END@%u (args=%s)"), (unsigned)s.i, (LPCTSTR)argStr);
+        trace.push_back(x);
+    }
 
     CString name;
     if (sp == -2)
@@ -353,6 +374,7 @@ void ERender::Statement(int d, std::vector<CString>& out, bool* pIsEnd, unsigned
 
     unsigned char t = s.u8();
     *pEndTok = t;
+    T(t, s.i - 1);
 
     // 连续空语句（0x01）跳过：用循环而不是递归，避免深栈 + 死循环
     while (t == 0x01)
@@ -365,7 +387,14 @@ void ERender::Statement(int d, std::vector<CString>& out, bool* pIsEnd, unsigned
 
     switch (t)
     {
-    case 0x6A: { CString cmt; CString c = FuncCall(d, true, &cmt); if (!c.IsEmpty()) out.push_back(c); return; }
+    case 0x6A:
+    {
+        size_t at = s.i - 1;
+        CString cmt;
+        CString c = FuncCall(d, true, &cmt);
+        if (!c.IsEmpty()) { CString p; p.Format(_T("[%04u] "), (unsigned)at); out.push_back(p + c); }
+        return;
+    }
     case 0x6B:
     case 0x6C: IfStmt(d, t, out); return;
     case 0x6D: SwitchStmt(d, out); return;
@@ -545,6 +574,20 @@ std::vector<CString> EcDecodeExpression(const unsigned char* pExpr, size_t nExpr
     std::vector<CString> noSubs;
     ERender r(pExpr, nExpr, libIdx, noSubs);
     r.Run(out);
+    // 诊断：ECLONE_TRACE_EXPR 给了路径就把 token 轨迹落盘（GBK）
+    {
+        TCHAR szTrace[MAX_PATH * 2];
+        if (::GetEnvironmentVariable(_T("ECLONE_TRACE_EXPR"), szTrace, MAX_PATH * 2) > 0)
+        {
+            FILE* f = _tfopen(szTrace, _T("ab"));
+            if (f)
+            {
+                for (size_t k = 0; k < r.trace.size(); k++)
+                    _ftprintf(f, _T("%s\n"), (LPCTSTR)r.trace[k]);
+                fclose(f);
+            }
+        }
+    }
     if (r.s.bad) strErr = _T("字节码解码中断（游标越界）");
     if (!r.err.IsEmpty()) strErr = _T("未识别 token: ") + r.err;
     return out;
