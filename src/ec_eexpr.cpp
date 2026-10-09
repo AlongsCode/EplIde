@@ -605,8 +605,10 @@ void ERender::Statement(int d, std::vector<CString>& out, bool* pIsEnd, unsigned
     //   SwitchStmt 的体循环靠 `et == 0x6E` 才能 break 到下一分支；
     //   若在这里把它当语句解，下一分支的 16 字节头会被当正文，整段脱轨（实测：置类型 ?argtok00@120）。
     //   依据： line_offset=[1,68,104,...] 中 1 和 104 都是 0x6E（block type=4 open=0 close=524）。
-    if ((t >= 0x50 && t <= 0x55) || t == 0xFF || t == 0x6E || t == 0x71 || t == 0x72
-        || t == 0x73 || t == 0x74) { *pIsEnd = true; return; }
+    // 0x6F：判断的「默认分支」标记（无头），由 SwitchStmt 消费。
+    //   ⚠️ 实测：漏了它会让精易模块报 553 个 ?stmt6F（几乎全部残留）。
+    if ((t >= 0x50 && t <= 0x55) || t == 0xFF || t == 0x6E || t == 0x6F || t == 0x71
+        || t == 0x72 || t == 0x73 || t == 0x74) { *pIsEnd = true; return; }
 
     switch (t)
     {
