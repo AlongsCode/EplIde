@@ -545,7 +545,11 @@ void ERender::Statement(int d, std::vector<CString>& out, bool* pIsEnd, unsigned
     // 块结束/分支标记。
     // ⚠️ 实测：把 0x72/0x73/0x75 加进来会让尾部语句丢失（更糟）—— 这里保持原样，
     //    剩下的 ?stmt73@738 留待下一轮用 e.exe 的块配对语义（sub_4C1B10）正确处理。
-    if ((t >= 0x50 && t <= 0x55) || t == 0xFF || t == 0x71 || t == 0x74) { *pIsEnd = true; return; }
+    // 块结束标记（都是长度 1、**无 16 字节头**）。块配对：
+    //   0x6B如果->0x72 如果结束 | 0x6C如果真->0x73 如果真结束
+    //   0x70循环首->0x71 循环尾 | 0x6D判断->0x74 判断尾
+    if ((t >= 0x50 && t <= 0x55) || t == 0xFF || t == 0x71 || t == 0x72 || t == 0x73
+        || t == 0x74) { *pIsEnd = true; return; }
 
     switch (t)
     {
@@ -603,7 +607,8 @@ void ERender::IfStmt(int d, unsigned char t, std::vector<CString>& out)
         bool isEnd = false; unsigned char et = 0;
         Statement(d + 1, out, &isEnd, &et);
         if (!isEnd) { if (s.i == before) { s.bad = true; break; } continue; }
-        if (et == 0x51) { out.push_back(_T("如果结束 ()")); return; }
+        if (et == 0x72 || et == 0x51) { out.push_back(_T("如果结束 ()")); return; }
+        if (et == 0x73) { out.push_back(_T("如果真结束 ()")); return; }
         if (et != 0x50) break;
         // 0x50（否则）也是长度 1、无头（同 sub_4C1C30 结论）——不能调 EndHeader
         out.push_back(_T("否则"));
@@ -641,7 +646,11 @@ void ERender::LoopStmt(int d, std::vector<CString>& out)
         if (s.i == before) { s.bad = true; break; }
     }
     CString cmt2;
-    CString tail = FuncCall(d, false, &cmt2);        // 0x71 + 头（ArgsOf 已吃掉参数流）
+    // ⚠️ 循环尾标记 0x71 **必须先消费**，FuncCall 才能从 0x71+1 读 16 字节头。
+    //    证据（trace14）：`55@758` 之后 `HDR@759 mid=2673`，
+    //    而 2673 = 0x0A71 = 把 0x71 字节当成了 mid 字段开头 -> 每处 0x71 少读 1 字节。
+    if (s.i < s.n && s.p[s.i] == 0x71) s.i++;
+    CString tail = FuncCall(d, false, &cmt2);        // 0x71 之后的头 + 参数流
     CString args2;
     if (false)
     {
