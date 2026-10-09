@@ -16,6 +16,7 @@
 // ===========================================================================
 #include "ec_eproj.h"
 #include "ec_lib.h"
+#include "ec_eexpr.h"
 #include <vector>
 #include <string>
 
@@ -188,6 +189,10 @@ struct EcMethod
     unsigned int id, classId, flags, retType;
     std::string  name, comment;
     std::vector<EcVar> locals, params;
+    // 6 个 byte_vec 里只留这两个（正文解码要用）：
+    //   lineOffset = 每个显示行行首在 expression 里的绝对偏移（u32 数组）
+    //   expr       = 语句流字节码
+    std::vector<unsigned char> lineOffset, expr;
 };
 
 struct EcAsm
@@ -395,7 +400,17 @@ bool EcParseProgram(const std::string& payload, UINT cp, EcProgram& prog)
         for (int q = 0; q < 6; q++)
         {
             unsigned int n = b.u32();
-            b.Skip(n);
+            // 0=lineOffset 5=expression；这两个正文解码要用，留下
+            if (q == 0 || q == 5)
+            {
+                std::string v = b.Bytes(n);
+                std::vector<unsigned char>& dst = (q == 0) ? m.lineOffset : m.expr;
+                dst.assign((const unsigned char*)v.data(), (const unsigned char*)v.data() + v.size());
+            }
+            else
+            {
+                b.Skip(n);
+            }
         }
         if (b.bad) return false;
         prog.methods.push_back(m);
@@ -786,6 +801,20 @@ BOOL EcLoadEProject(LPCTSTR pszPath, CString& strOut)
                 EcLine(out, EcVarLine(_T(".参数"), m.params[pi], cp, TRUE, libIdx, prog));
             for (size_t li = 0; li < m.locals.size(); li++)
                 EcLine(out, EcVarLine(_T(".局部变量"), m.locals[li], cp, FALSE, libIdx, prog));
+
+            // ---- 子程序正文：解码 expression 字节码 ----
+            // 规格见 D:\EPL\_ida\SEGMENT_SPEC.md §3.6（321 子程序验证过）
+            {
+                CString strErr;
+                std::vector<CString> body = EcDecodeExpression(
+                    m.expr.empty() ? NULL : &m.expr[0], m.expr.size(),
+                    m.lineOffset.empty() ? NULL : &m.lineOffset[0], m.lineOffset.size(),
+                    libIdx, strErr);
+                for (size_t bi = 0; bi < body.size(); bi++)
+                    EcLine(out, CString(_T("    ")) + body[bi]);
+                if (!strErr.IsEmpty())
+                    EcLine(out, CString(_T("    ' [解码提示] ")) + strErr);
+            }
         }
     }
 
