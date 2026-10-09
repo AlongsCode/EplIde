@@ -2342,7 +2342,13 @@ void CMainFrame::PopulatePanes()
     {
         if (m_ilProg.GetSafeHandle() != NULL)
             pPrg->SetImageList(&m_ilProg, TVSIL_NORMAL);
-        EcBuildProgTree(pPrg, EcSrcProg(), EcSrcDll());
+        {
+            DWORD t = ::GetTickCount();
+            EcBuildProgTree(pPrg, EcSrcProg(), EcSrcDll());
+            char m[160]; ::wsprintfA(m, "[ECLONE_TIME] E2_BuildProgTree : %lu ms\n",
+                                     (unsigned long)(::GetTickCount() - t));
+            ::fputs(m, stderr);
+        }
     }
 
     // 工作夹 - 属性页：列由支持库的属性元数据生成（见 CPaneBar::FillProps），
