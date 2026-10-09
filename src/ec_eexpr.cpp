@@ -791,7 +791,11 @@ void ERender::SwitchStmt(int d, std::vector<CString>& out)
                 out.push_back(_T("判断结束 ()"));
                 return;
             }
-            if (et == 0x54) continue;
+            // ⚠️ 与 IfStmt/LoopStmt 一致：0x51..0x55 都是「块体结束」标记，
+            //   **只消费、不结束本分支**。
+            //   曾经只处理 0x54 -> 0x53 落到下面的 break -> 分支循环在 `0x6E` 本身上调 FuncCall
+            //   -> mid 读成 0x6e020000，参数流落到头尾部的 0x00 -> ?argtok00（实测置类型@120）。
+            if (et >= 0x51 && et <= 0x55) continue;
             if (et == 0x74) { out.push_back(_T("判断结束 ()")); return; }
             break;
         }
