@@ -400,10 +400,21 @@ size_t ERender::VarChainLen(size_t at)
     {
         if (q >= s.n) return q - at;
         unsigned char t = s.p[q];
-        if (t == 0x37) return (q + 1) - at;              // 链结束
-        if (t == 0x39) { q += 9; continue; }             // 成员：1 + u32 + u32
-        if (t == 0x3A) { q += 1; q += TokenLen(q); continue; }   // 下标：1 + 子表达式
-        return q - at;                                    // 未知：就此打住
+        // ★ 按 sub_4BEE30@0x4BEE30 的**完整**反汇编逐条对齐
+        //   （之前缺了 0x21 / 0x38 / 0x3B，0x3A 也写错了）：
+        //     case '!': v4 += sub_4BF730(v5+1) + 1; continue;   // 0x21
+        //     case '7': return v4 + 1;                          // 0x37
+        //     case '8': v4 += sub_4BEE30(&a3[v4]); continue;    // 0x38
+        //     case '9': v4 += 9;  continue;                     // 0x39
+        //     case ':': ++v4;     continue;                     // 0x3A
+        //     case ';': v4 += 5;  continue;                     // 0x3B
+        if (t == 0x37) return (q + 1) - at;                       // 链结束
+        if (t == 0x21) { q += 1 + CallLen(q + 1); continue; }     // 函数调用表达式
+        if (t == 0x38) { q += ObjLen(q);          continue; }     // 嵌套对象表达式
+        if (t == 0x39) { q += 9;                  continue; }     // 成员
+        if (t == 0x3A) { q += 1;                  continue; }     // 下标（只 +1，由下一轮分派）
+        if (t == 0x3B) { q += 5;                  continue; }     // 0x3B
+        return q - at;                                            // 其它：保守停住
     }
     return q - at;
 }
