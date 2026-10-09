@@ -592,9 +592,15 @@ void ERender::IfStmt(int d, unsigned char t, std::vector<CString>& out)
             size_t before = s.i;
             bool isEnd = false; unsigned char et = 0;
             Statement(d + 1, out, &isEnd, &et);
-            // 0x50..0x55 长度都是 1（sub_4BEAE0 归为 class 5，sub_4C1C30 返回 false）
-            // —— **没有 16 字节头**，不能调 EndHeader（曾经就是这里每次多读 16 字节）。
-            if (isEnd) break;
+            // 0x50..0x55 是「块体结束」标记（长度 1、无 16 字节头），**不结束块**；
+            // 真正的闭块符是 0x72(如果结束)/0x73(如果真结束)。
+            // 实测：把 0x52@737 当块结束 -> 如果真提前收尾 -> 0x73@738 漏给外层 LoopStmt
+            // -> FuncCall 在 739（0x6a 字节本身）读 mid -> 残留 ?argtok00?stmt00@755?stmt36@756。
+            if (isEnd)
+            {
+                if (et >= 0x50 && et <= 0x55) continue;
+                break;
+            }
             if (s.i == before) { s.bad = true; break; }
         }
         out.push_back(_T("如果真结束 ()"));
@@ -607,9 +613,14 @@ void ERender::IfStmt(int d, unsigned char t, std::vector<CString>& out)
         bool isEnd = false; unsigned char et = 0;
         Statement(d + 1, out, &isEnd, &et);
         if (!isEnd) { if (s.i == before) { s.bad = true; break; } continue; }
-        if (et == 0x72 || et == 0x51) { out.push_back(_T("如果结束 ()")); return; }
+        if (et == 0x72) { out.push_back(_T("如果结束 ()")); return; }
         if (et == 0x73) { out.push_back(_T("如果真结束 ()")); return; }
-        if (et != 0x50) break;
+        if (et != 0x50)
+        {
+            // 0x51..0x55 只消费不结束块（同 bIfTrue 分支的结论）
+            if (et >= 0x51 && et <= 0x55) continue;
+            break;
+        }
         // 0x50（否则）也是长度 1、无头（同 sub_4C1C30 结论）——不能调 EndHeader
         out.push_back(_T("否则"));
         for (int g2 = 0; g2 < 5000 && !s.bad && s.i < s.n; g2++)
