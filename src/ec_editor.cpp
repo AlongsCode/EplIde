@@ -579,13 +579,21 @@ void CECEditor::SetKind(int k)
 // 新的改动会砍掉 m_nUndo 之后的重做分支。
 static CString EcJoinLines(const std::vector<CString>& v)
 {
-    CString s;
-    for (size_t i = 0; i < v.size(); i++)
+    // ⚠️ 性能：**必须用 std::string + 预计算 reserve**，不能用 CString 逐行 += 。
+    //   MFC 的 CString 在引用计数 >1 时每次 += 都整体复制缓冲区 -> O(n^2)。
+    //   实测（精易模块 32172 行）：旧写法 **44141 ms**，
+    //   占了整个 SetText（44906 ms）的 98% 。
+    size_t total = 0;
+    for (size_t k1 = 0; k1 < v.size(); k1++)
+        total += (size_t)v[k1].GetLength() + 2;
+    std::string s;
+    s.reserve(total + 16);
+    for (size_t k2 = 0; k2 < v.size(); k2++)
     {
-        if (i) s += _T("\r\n");
-        s += v[i];
+        if (k2) s += "\r\n";
+        s += (LPCSTR)v[k2];
     }
-    return s;
+    return CString(s.c_str());
 }
 
 void CECEditor::PushUndo()
@@ -1320,8 +1328,20 @@ BOOL CECEditor::FindNext(BOOL bForward)
     return FALSE;
 }
 
+// ECLONE_TIME=1 时的阶段计时（打到 stderr）
+static void EcEdTime(const char* pszStage, DWORD dwStart)
+{
+    char szOn[8];
+    if (::GetEnvironmentVariableA("ECLONE_TIME", szOn, sizeof(szOn)) == 0) return;
+    char m[192];
+    ::wsprintfA(m, "[ECLONE_TIME] %s : %lu ms\n", pszStage,
+                (unsigned long)(::GetTickCount() - dwStart));
+    ::fputs(m, stderr);
+}
+
 void CECEditor::SetText(LPCTSTR psz)
 {
+    DWORD t0 = ::GetTickCount();
     m_lines.clear();
     CString s(psz);
     int a = 0;
@@ -1335,7 +1355,11 @@ void CECEditor::SetText(LPCTSTR psz)
         m_lines.push_back(line);
         if (a > s.GetLength()) break;
     }
+    EcEdTime("S1_splitlines", t0);
+    DWORD t1 = ::GetTickCount();
     Rebuild();
+    EcEdTime("S2_Rebuild", t1);
+    DWORD t2 = ::GetTickCount();
     m_nCaretLine = m_nCaretCol = 0;
     m_nCaretCell = -1;
     for (int i = 0; i < (int)m_rows.size(); i++)
@@ -1348,14 +1372,22 @@ void CECEditor::SetText(LPCTSTR psz)
     m_nAnchorLine = m_nCaretLine; m_nAnchorCol = 0;
     m_nScroll = 0;                  // 打开时停在程序集头（与原版一致，不要跟着光标滚）
     Layout();
+    EcEdTime("S3_Layout", t2);
+    DWORD t3 = ::GetTickCount();
     UpdateScrollBar();
     Invalidate(FALSE);
     // 打开文档 = 撤消栈的第 0 份（Undo 回不到"打开之前"）
     m_undo.clear();
     m_nUndo = -1;
+    EcEdTime("S4_scroll_invalidate", t3);
+    DWORD t4 = ::GetTickCount();
     PushUndo();
+    EcEdTime("S5_PushUndo", t4);
     // 诊断：设了 ECLONE_DUMP_MODEL=<路径> 就把排好的显示模型倒出来（量像素对位用）
+    DWORD t5 = ::GetTickCount();
     DumpModel();
+    EcEdTime("S6_DumpModel", t5);
+    EcEdTime("S0_SetText_total", t0);
 }
 
 // 把当前排好版的显示模型倒成文本。除了 SetText 会自动倒一次，
