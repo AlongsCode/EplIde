@@ -19,6 +19,7 @@
 #include "ec_eexpr.h"
 #include <vector>
 #include <string>
+#include <map>
 
 // ------------------------------------------------------------------ 段 key
 #define ESEG_USERINFO     0x01007319u
@@ -280,6 +281,19 @@ bool EcParseConsts(EcBuf& b, std::vector<EcEpConst>& out)
     unsigned int k;
     unsigned int count = b.u32();
     unsigned int datalenth = b.u32();
+    // 诊断（ECLONE_DUMP_CONSTS 时开）：Program 段走到常量表时 buffer 的真实状态。
+    // 用途：判定 `count=0` 到底是「这里就是段尾、本来就没常量」，还是「偏移走错了」。
+    if (::GetEnvironmentVariable(_T("ECLONE_DUMP_CONSTS"), NULL, 0) > 0)
+    {
+        FILE* fd = _tfopen(_T("D:\\EPL\\_ida\\consts_probe.txt"), _T("a"));
+        if (fd != NULL)
+        {
+            fprintf(fd, "EcParseConsts: b.i=%u b.n=%u left=%u  count=%u datalenth=%u bad=%d\n",
+                    (unsigned)b.i, (unsigned)b.n, (unsigned)b.Left(), count, datalenth,
+                    (int)b.bad);
+            fclose(fd);
+        }
+    }
     if (b.bad || count > 100000) return false;
     if (datalenth > b.Left()) return false;
 
@@ -344,6 +358,84 @@ bool EcParseConsts(EcBuf& b, std::vector<EcEpConst>& out)
     return true;
 }
 
+// 解析「自定义常量表」—— 它在**程序资源段**，不在程序段。
+//
+// 判据（第 42 轮字节级实证，详见 D:\EPL\HANDOFF.md §5）：
+//   * 精易模块程序段头部第 5 字段 minRequiredConstants = 0xF4(244) -> 确实有常量，
+//     但 `EcParseConsts` 在程序段尾部读到的是 `"dwNumberOfBytesWritten"` 垃圾
+//     （诊断：b.i=4293370 b.n=4293402 left=32 count=0）。
+//   * 程序资源段 payload 布局（段内相对偏移）：
+//       +0      u32 0
+//       +4      u32 条目数 N
+//       +8      u32 数据长度
+//       +12     u32 ids[N]      全部 kind==0x08（自定义常量族，见 sub_44F1C0）
+//       +12+4N  u32 offs[N]     每条记录相对「记录区起点」的偏移
+//       20980   记录区起点（第一条实测 total=744 / mark=0x10 / GBK "精易论坛模块注释"）
+//     记录格式： [u32 total][u32 mark][GBK 名字]\0 ... 到 total 为止
+//   * 验真：正文里我们渲染成 `#常量402825463` 的 id `0x1802A0F7` 用这套算法
+//     解出名字 **`_gb2312`**（实测）。
+//
+// ⚠️ 记录区起点 20980 与 `offs` 的基准是**实测**出来的（试过 12+4N、试过绝对偏移，
+//    都会解出垃圾）。若将来换样本失败，先用
+//    `python -B D:\EPL\_ida\const_lookup.py <file.e> <id>` 复量这个基准。
+static bool EcParseUserConsts(const std::string& payload, std::vector<EcEpConst>& out)
+{
+    out.clear();
+    if (payload.size() < 16) return false;
+
+    const unsigned char* p = (const unsigned char*)payload.data();
+    size_t n = payload.size();
+
+    unsigned int count = (unsigned int)p[4] | ((unsigned int)p[5] << 8)
+                       | ((unsigned int)p[6] << 16) | ((unsigned int)p[7] << 24);
+    if (count == 0 || count > 200000) return false;
+
+    size_t idsAt  = 12;
+    size_t offsAt = idsAt + (size_t)count * 4;
+    size_t recAt  = 20980;                    // 记录区起点（实测，见上面说明）
+    if (offsAt + (size_t)count * 4 > n) return false;
+    if (recAt >= n) return false;
+
+    const unsigned int REC_AREA = 20980;
+    unsigned int k;
+    for (k = 0; k < count; k++)
+    {
+        unsigned int id = (unsigned int)p[idsAt + k * 4]
+                        | ((unsigned int)p[idsAt + k * 4 + 1] << 8)
+                        | ((unsigned int)p[idsAt + k * 4 + 2] << 16)
+                        | ((unsigned int)p[idsAt + k * 4 + 3] << 24);
+        unsigned int off = (unsigned int)p[offsAt + k * 4]
+                         | ((unsigned int)p[offsAt + k * 4 + 1] << 8)
+                         | ((unsigned int)p[offsAt + k * 4 + 2] << 16)
+                         | ((unsigned int)p[offsAt + k * 4 + 3] << 24);
+        size_t rp = (size_t)REC_AREA + off;
+        if (rp + 8 > n) continue;
+        unsigned int total = (unsigned int)p[rp] | ((unsigned int)p[rp + 1] << 8)
+                           | ((unsigned int)p[rp + 2] << 16) | ((unsigned int)p[rp + 3] << 24);
+        if (total < 8 || total > 40000) continue;
+        if (rp + 4 + total > n) continue;
+
+        // 名字从 +8 起（跳过 mark 那 4 字节），到 NUL 或记录尾为止
+        size_t nmAt = rp + 8;
+        size_t nmEnd = rp + 4 + total;
+        if (nmEnd > n) nmEnd = n;
+        size_t e = nmAt;
+        while (e < nmEnd && p[e] != 0) e++;
+        std::string nm((const char*)p + nmAt, e - nmAt);
+
+        EcEpConst c;
+        c.id      = id;
+        c.flags   = 0;
+        c.kind    = 0;
+        c.numVal  = 0.0;
+        c.boolVal = false;
+        c.binLen  = 0;
+        c.name    = nm;
+        out.push_back(c);
+    }
+    return !out.empty();
+}
+
 // 解析程序段 payload
 bool EcParseProgram(const std::string& payload, UINT cp, EcProgram& prog)
 {
@@ -354,7 +446,24 @@ bool EcParseProgram(const std::string& payload, UINT cp, EcProgram& prog)
     b.u32();                 // skip
     b.MfcString();           // minRequiredCmds  ([u32 size][data])
     b.MfcString();           // minRequiredDataTypes
-    b.MfcString();           // minRequiredConstants
+    // ⚠️ minRequiredConstants 原本被丢弃。它其实说明「这个工程需要哪些常量」，
+    //    是判定「常量表该不该有内容 / 我们是不是读错了地方」的直接证据。
+    {
+        std::string sReq = b.MfcString();
+        if (::GetEnvironmentVariable(_T("ECLONE_DUMP_CONSTS"), NULL, 0) > 0)
+        {
+            FILE* fr = _tfopen(_T("D:\\EPL\\_ida\\consts_probe.txt"), _T("a"));
+            if (fr != NULL)
+            {
+                fprintf(fr, "minRequiredConstants: len=%d bytes=", (int)sReq.size());
+                size_t q;
+                for (q = 0; q < sReq.size() && q < 64; q++)
+                    fprintf(fr, "%02X", (unsigned char)sReq[q]);
+                fprintf(fr, "\n");
+                fclose(fr);
+            }
+        }
+    }
     if (b.bad) return false;
 
     prog.libs = b.MfcStringArray();
@@ -729,6 +838,9 @@ BOOL EcLoadEProject(LPCTSTR pszPath, CString& strOut)
     // ---- 1. 遍历段表，找 SystemInfo（拿语言码）与 Program ----
     UINT cp = 936;                       // 默认 GBK，SystemInfo 语言码可以改它
     std::string progPayload;
+    // ⚠️ 自定义常量表在**程序资源段**（第 42 轮实证，见 EcParseUserConsts 的说明）。
+    //    程序段里没有它 —— 在程序段尾部读只会拿到 "dwNumberOfBytesWritten" 垃圾。
+    std::map<unsigned int, std::string> userConstNames;
     {
         size_t pos = 8;
         while (pos + 100 <= len)
@@ -762,6 +874,20 @@ BOOL EcLoadEProject(LPCTSTR pszPath, CString& strOut)
             }
             if (segKey == ESEG_PROGRAM)
                 progPayload.assign(data, pos + 100, size);
+            if (segKey == ESEG_RESOURCE && size > 16)
+            {
+                // 就地解析：资源段常量表 -> id -> 名字（用于渲染 `#常量名`）
+                std::string resPayload;
+                resPayload.assign(data, pos + 100, size);
+                std::vector<EcEpConst> ucon;
+                if (EcParseUserConsts(resPayload, ucon))
+                {
+                    size_t ui;
+                    for (ui = 0; ui < ucon.size(); ui++)
+                        if (!ucon[ui].name.empty())
+                            userConstNames[ucon[ui].id] = ucon[ui].name;
+                }
+            }
 
             pos += 100 + size;
             if (segKey == ESEG_END) break;
@@ -775,6 +901,27 @@ BOOL EcLoadEProject(LPCTSTR pszPath, CString& strOut)
     // ---- 2. 解程序段 ----
     EcProgram prog;
     if (!EcParseProgram(progPayload, cp, prog)) return FALSE;
+
+    // 自定义常量名（来自资源段）：并进 prog.consts。
+    // 判据： `EcParseConsts` 在程序段尾部拿到的 count 恒为 0（读到的是段尾垃圾），
+    // 真正的表在资源段 —— 用 userConstNames 覆盖，渲染 `#名字` 就有名字了。
+    if (!userConstNames.empty())
+    {
+        prog.consts.clear();
+        std::map<unsigned int, std::string>::const_iterator it;
+        for (it = userConstNames.begin(); it != userConstNames.end(); ++it)
+        {
+            EcEpConst c;
+            c.id      = it->first;
+            c.flags   = 0;
+            c.kind    = 0;
+            c.numVal  = 0.0;
+            c.boolVal = false;
+            c.binLen  = 0;
+            c.name    = it->second;
+            prog.consts.push_back(c);
+        }
+    }
 
     dwT2 = ::GetTickCount();
     EcTimeMark2A("2_parseprogram", dwT1);
@@ -856,6 +1003,25 @@ BOOL EcLoadEProject(LPCTSTR pszPath, CString& strOut)
         add.Add(prog.globals[symG].id, EcToGbk(prog.globals[symG].name, cp));
     for (symC = 0; symC < prog.consts.size(); symC++)
         add.Add(prog.consts[symC].id, EcToGbk(prog.consts[symC].name, cp));
+    // 诊断（ECLONE_DUMP_CONSTS=<path>）：把常量表的 (id, name) 全倒出来。
+    // 用途：判定渲染器输出的 `#常量<id>` 到底在不在表里 —— 在表里说明查表没命中（键口径错），
+    // 不在表里说明这个 id 根本不是"用户常量"（可能是系统常量/别的元素种类）。
+    {
+        TCHAR szC[MAX_PATH];
+        if (::GetEnvironmentVariable(_T("ECLONE_DUMP_CONSTS"), szC, MAX_PATH) > 0)
+        {
+            FILE* fC = _tfopen(szC, _T("w"));
+            if (fC != NULL)
+            {
+                fprintf(fC, "count=%d\n", (int)prog.consts.size());
+                size_t ck;
+                for (ck = 0; ck < prog.consts.size(); ck++)
+                    fprintf(fC, "%08X\t%s\n", (unsigned)prog.consts[ck].id,
+                            (LPCSTR)EcToGbk(prog.consts[ck].name, cp));
+                fclose(fC);
+            }
+        }
+    }
     for (symS = 0; symS < prog.structs.size(); symS++)
     {
         add.Add(prog.structs[symS].id, EcToGbk(prog.structs[symS].name, cp));
