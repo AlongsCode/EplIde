@@ -100,7 +100,12 @@ struct ERender
     std::vector<unsigned int> stmtStarts;
 
     ERender(const unsigned char* p, size_t n, int lib, const std::vector<CString>& subNames)
-        : s(p, n), libIdx(lib), subs(subNames) {}
+        : s(p, n), libIdx(lib), subs(subNames)
+    {
+        // 位置缓存初始化（-1 = 未算）。不初始化会越界。
+        memoToken.assign(n + 1, -1);
+        memoArgs.assign(n + 1, -1);
+    }
 
     CString Num(double d)
     {
@@ -162,10 +167,16 @@ struct ERender
         return (unsigned int)s.p[at] | ((unsigned int)s.p[at+1] << 8)
              | ((unsigned int)s.p[at+2] << 16) | ((unsigned int)s.p[at+3] << 24);
     }
-    size_t TokenLen(size_t at);        // 单 token 长度（照 sub_4BF090）
+    size_t TokenLen(size_t at);        // 单 token 长度（照 sub_4BF090），带缓存
+    size_t TokenLenRaw(size_t at);     // 不带缓存的实现
+    // 位置缓存：-1 = 未算。解码器里 ArgsLen/TokenLen/CallLen/ObjLen 会反复扫同一段，
+    // 缓存后从 O(n^2) 降到 O(n)。实测：精易模块 3554 子程序曾要 45s。
+    std::vector<int> memoToken;
+    std::vector<int> memoArgs;
     size_t ObjLen(size_t at);          // 对象/组子表达式长度（照 sub_4BEE30）
     size_t CallLen(size_t at);         // 0x21/0x22 函数调用：1 + sub_4BF730(at+1)
-    size_t ArgsLen(size_t at);         // 参数流长度（照 sub_4BF500），含 0x01
+    size_t ArgsLen(size_t at);         // 参数流长度（照 sub_4BF500），含 0x01，带缓存
+    size_t ArgsLenRaw(size_t at);      // 不带缓存的实现
     size_t VarChainLen(size_t at);     // 0x38 <u32 id> 之后的链
     CString VarExpr(int d);
     CString VarExprBody(int d);
@@ -401,6 +412,14 @@ size_t ERender::ObjLen(size_t at)
 // sub_4BF090：单 token 长度。**这是权威表**，不要改成自己猜。
 size_t ERender::TokenLen(size_t at)
 {
+    if (at <= s.n && memoToken[at] >= 0) return (size_t)memoToken[at];
+    size_t r = TokenLenRaw(at);
+    if (at <= s.n) memoToken[at] = (int)r;
+    return r;
+}
+
+size_t ERender::TokenLenRaw(size_t at)
+{
     if (at >= s.n) return 1;
     unsigned char t = s.p[at];
     if (t == 0x01) return 1;                              // 终结符
@@ -433,6 +452,14 @@ size_t ERender::TokenLen(size_t at)
 
 // sub_4BF500：参数流长度 = 累加各 token 长度，遇 0x01 停，**并把 0x01 算进去**（v4 = v2 + 1）
 size_t ERender::ArgsLen(size_t at)
+{
+    if (at <= s.n && memoArgs[at] >= 0) return (size_t)memoArgs[at];
+    size_t r = ArgsLenRaw(at);
+    if (at <= s.n) memoArgs[at] = (int)r;
+    return r;
+}
+
+size_t ERender::ArgsLenRaw(size_t at)
 {
     size_t q = at;
     for (int guard = 0; guard < 20000; guard++)
