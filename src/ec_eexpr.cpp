@@ -232,7 +232,8 @@ CString ERender::ArgsOf(int d)
     }
     else
     {
-        CString x; x.Format(_T("?argtok%02X"), (start < s.n) ? s.p[start] : 0);
+        CString x;
+        x.Format(_T("?argtok%02X@%u"), (start < s.n) ? s.p[start] : 0, (unsigned)start);
         Err(x);
         return joined;
     }
@@ -490,17 +491,10 @@ CString ERender::FuncCall(int d, bool bStatement, CString* pComment)
     }
     std::string code = s.mfc();
     std::string cmt  = s.mfc();
-    // 诊断：code_len != 0 的情况（子智能体标注过未验证）
-    if (!code.empty())
-    {
-        static int s_nCode = 0;
-        if (s_nCode < 20)
-        {
-            s_nCode++;
-            CString x; x.Format(_T("?CODE(len=%d)"), (int)code.size());
-            Err(x);
-        }
-    }
+    // 注：`code`与`comment`都是 mfc_string，**顺序不影响推进**。
+    // 实测学生管理系统里就有 code 非空（40 字节）的命令，
+    // 所以「code_len 恒为 0」只是那 262 个样本的巧合，头布局是对的。
+    (void)code.size();
     (void)fl;
     CString comment = Text(cmt);
     if (pComment) *pComment = comment;
@@ -607,8 +601,12 @@ void ERender::Statement(int d, std::vector<CString>& out, bool* pIsEnd, unsigned
     // 块结束标记（都是长度 1、**无 16 字节头**）。块配对：
     //   0x6B如果->0x72 如果结束 | 0x6C如果真->0x73 如果真结束
     //   0x70循环首->0x71 循环尾 | 0x6D判断->0x74 判断尾
-    if ((t >= 0x50 && t <= 0x55) || t == 0xFF || t == 0x71 || t == 0x72 || t == 0x73
-        || t == 0x74) { *pIsEnd = true; return; }
+    // ⚠️ `0x6E`（分支）必须作为**结束标记**返回，不能当语句分支！
+    //   SwitchStmt 的体循环靠 `et == 0x6E` 才能 break 到下一分支；
+    //   若在这里把它当语句解，下一分支的 16 字节头会被当正文，整段脱轨（实测：置类型 ?argtok00@120）。
+    //   依据： line_offset=[1,68,104,...] 中 1 和 104 都是 0x6E（block type=4 open=0 close=524）。
+    if ((t >= 0x50 && t <= 0x55) || t == 0xFF || t == 0x6E || t == 0x71 || t == 0x72
+        || t == 0x73 || t == 0x74) { *pIsEnd = true; return; }
 
     switch (t)
     {
@@ -618,14 +616,6 @@ void ERender::Statement(int d, std::vector<CString>& out, bool* pIsEnd, unsigned
         CString cmt;
         CString c = FuncCall(d, true, &cmt);
         if (!c.IsEmpty()) { CString p; p.Format(_T("[%04u] "), (unsigned)at); out.push_back(p + c); }
-        return;
-    }
-    case 0x6E:                                      // 分支（sub_4C1C30 认定它是语句头）
-    {                                               // 结构与 0x6A 相同：16 字节头 + 参数流
-        size_t at6e = s.i - 1;
-        CString cmt6e;
-        CString c6e = FuncCall(d, true, &cmt6e);
-        if (!c6e.IsEmpty()) { CString p; p.Format(_T("[%04u] "), (unsigned)at6e); out.push_back(p + c6e); }
         return;
     }
     case 0x6B:
