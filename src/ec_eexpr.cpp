@@ -330,13 +330,27 @@ CString ERender::FuncCall(int d, bool bStatement, CString* pComment)
     else if (sp == -1) name.Empty();
     else
     {
-        CString loop = (mid <= 10) ? EcLoopName(mid) : CString();
-        if (!loop.IsEmpty()) name = loop;
+        // 真命令名：spaceId == 0 是核心库 krnln，>0 是 `prog.libs[]` 的下标。
+        // 依据（子智能体实测）：methodId 就是 LIB_INFO.m_pBeginCmdInfo 的下标，
+        // 688/688 条全静态可解；Bubble Sort 的 18 个下标 18/18 语义吻合。
+        // 规格与证据：D:\EPL\_ida\fne_cmds.txt、_verify_samples.txt、_verify_space.txt
+        int libOfSpace = libIdx;
+        if (sp > 0) libOfSpace = sp - 1 + (libIdx >= 0 ? libIdx : 0);
+        CString real;
+        if (libOfSpace >= 0)
+        {
+            const EcCmd* pc = EcCmdAt(libOfSpace, (int)mid);
+            if (pc != NULL) real = pc->name;
+        }
+        // 运算符排版优先用本地表（EcOpName 与真表一致，且它管 "+ - *" 这类显示）
+        CString op = (sp == 0) ? EcOpName(mid) : CString();
+        if (!op.IsEmpty()) name = op;
+        else if (!real.IsEmpty()) name = real;
         else
         {
-            CString op = (sp == 0) ? EcOpName(mid) : CString();
-            if (op.IsEmpty()) name.Format(_T("命令<%d,%u>"), sp, mid);
-            else name = op;
+            CString loop = (mid <= 10) ? EcLoopName(mid) : CString();
+            if (!loop.IsEmpty()) name = loop;
+            else name.Format(_T("命令<%d,%u>"), sp, mid);
         }
     }
 

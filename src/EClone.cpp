@@ -3043,6 +3043,23 @@ BOOL CECloneApp::InitInstance()
         g_bExitAfterInit = TRUE;
 
     // 命令行给了真 .e 就打开工程；没有就用采样源码（原行为不变）
+    //
+    // ⚠️ 必须**先把核心库载入**再生成 .e 文本：命令名要按 (spaceId, methodId) 查
+    //    LIB_INFO.m_pBeginCmdInfo（见 ec_lib.cpp 的 EcCmdAt）。而支持库原本是在
+    //    CMainFrame/PopulatePanes 阶段才载入的 —— 那时 .e 文本已经生成完了，
+    //    结果就是只能打出 `命令<0,52>` 占位（实测踩过）。
+    //    这里先载一次；PopulatePanes 那次会因 EcLibIsLoaded 跳过已载入的，不会重复。
+    if (EcLibFindByBaseName(_T("krnln")) < 0)
+    {
+        CString strLibDir;
+        if (FindLibDir(strLibDir))
+        {
+            CStringArray load;
+            load.Add(_T("krnln"));
+            CString sLog;
+            EcLoadLibs(strLibDir, &load, &sLog);
+        }
+    }
     {
         CString strE;
         if (EcFindEArg(strE))

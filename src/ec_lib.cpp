@@ -1485,6 +1485,16 @@ CString EcNodeHint(int i)
 // 全部依据 lib2.h（ITF_*/PFN_CREATE_UNIT）+ krnln 伪 C（window_designer_notes.md §3/§7）。
 // 调用约定：PFN_GET_INTERFACE 与 PFN_CREATE_UNIT 都是 WINAPI(stdcall)，PFN_ON_NOTIFY_UNIT 也是。
 
+const EcCmd* EcCmdAt(int lib, int idx)
+{
+    if (lib < 0 || lib >= (int)g_libs.size()) return NULL;
+    const EcLib& L = g_libs[lib];
+    if (idx < 0 || idx >= L.nCmd) return NULL;
+    int k = L.cmdStart + idx;      // cmdStart 是本库命令表在 g_cmds 里的起点
+    if (k < 0 || k >= (int)g_cmds.size()) return NULL;
+    return &g_cmds[k];
+}
+
 const EcDataType* EcDtAt(int lib, int dt)
 {
     if (lib < 0 || lib >= (int)g_libs.size())

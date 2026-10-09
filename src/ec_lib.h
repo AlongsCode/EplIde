@@ -209,6 +209,11 @@ CString EcOsText(DWORD state, BOOL bIsLib);
 #define EC_LDT_IS_FUNCTION_PROVIDER    (1 << 15)   // 只提供功能、没有可视外形（时钟/对话框…）
 #define EC_UW_IS_HIDED                 (1 << 4)    // UNIT_PROPERTY：隐藏但可用（属性表里不列）
 
+// 按「库级命令下标」取命令。idx = `.e` 语句头里的 methodId
+// （= LIB_INFO.m_pBeginCmdInfo 的下标，0 基；CMD_INFO 步长 36 字节，+0 是 GBK 命令名）。
+// 依据：子智能体实测 688/688 条全静态可解，且 Bubble Sort 的 18 个下标 18/18 语义吻合。
+// ⚠️ 不要用 EcDtAt(...)->cmdStart —— 那是「数据类型内序号」，与 methodId 不是一个口径。
+const EcCmd* EcCmdAt(int lib, int idx);              // 越界返回 NULL
 const EcDataType* EcDtAt(int lib, int dt);              // 越界返回 NULL
 const EcProp* EcPropAt(int lib, int dt, int idx);       // 第 idx 个属性（元数据里的下标 = ITF 6/4 的属性号）
 // 第 idx 个事件（EcEvent::name = **中文事件名**，如 "被单击"）。
