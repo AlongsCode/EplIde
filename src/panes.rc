@@ -1,0 +1,173 @@
+// panes.rc -- 停靠面板的对话框模板（原版实测：面板内部就是一个 #32770 对话框 + SysTabControl32）
+
+// ---------------------------------------------------------------- 工作夹 (左, 原版 229x462)
+IDD_WORKPANE DIALOG 0, 0, 219, 438
+STYLE DS_CONTROL | WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN
+CAPTION "工作夹"
+FONT 9, "宋体"
+BEGIN
+    CONTROL         "", IDC_TAB_WORK, "SysTabControl32",
+                    TCS_BOTTOM | TCS_TABS | WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
+                    2, 2, 215, 434
+
+    // 页 0: 支持库
+    CONTROL         "", IDC_TREE_WORK, "SysTreeView32",
+                    WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL | WS_HSCROLL |
+                    TVS_HASBUTTONS | TVS_HASLINES | TVS_LINESATROOT | TVS_SHOWSELALWAYS,
+                    4, 22, 211, 412
+    // 页 1: 程序
+    CONTROL         "", IDC_TREE_WORK + 1, "SysTreeView32",
+                    WS_CHILD | WS_BORDER | WS_VSCROLL | WS_HSCROLL |
+                    TVS_HASBUTTONS | TVS_HASLINES | TVS_LINESATROOT | TVS_SHOWSELALWAYS,
+                    4, 22, 211, 412
+    // 页 2: 属性（原版是 SysListView32 报表模式）
+    CONTROL         "", IDC_TREE_WORK + 2, "SysListView32",
+                    WS_CHILD | WS_BORDER | WS_VSCROLL |
+                    LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | LVS_NOSORTHEADER,
+                    4, 22, 211, 412
+END
+
+// ---------------------------------------------------------------- 状态夹 (下, 原版 1430x225)
+// 注意：原版"状态夹"的标签页在**顶部**（SysTabControl32 覆盖整个 pane，内容在其下方），
+//       而"工作夹"的标签页在**底部**（TCS_BOTTOM）。这是两边对比截图实测出来的。
+IDD_STATUSPANE DIALOG 0, 0, 1424, 169
+STYLE DS_CONTROL | WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN
+CAPTION "状态夹"
+FONT 9, "宋体"
+BEGIN
+    CONTROL         "", IDC_TAB_STATUS, "SysTabControl32",
+                    TCS_TABS | WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
+                    2, 2, 1420, 165
+
+    // 页 0 提示 / 页 1 输出 / 页 5 搜寻1 / 页 6 搜寻2：Edit
+    CONTROL         "", IDC_EDIT_OUTPUT, "Edit",
+                    WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL | WS_HSCROLL |
+                    ES_MULTILINE | ES_AUTOVSCROLL | ES_AUTOHSCROLL | ES_READONLY,
+                    4, 22, 1416, 143
+    CONTROL         "", IDC_EDIT_OUTPUT + 1, "Edit",
+                    WS_CHILD | WS_BORDER | WS_VSCROLL | WS_HSCROLL |
+                    ES_MULTILINE | ES_AUTOVSCROLL | ES_AUTOHSCROLL | ES_READONLY,
+                    4, 22, 1416, 143
+    // 页 2 调用表 / 页 4 变量表：SysListView32
+    CONTROL         "", IDC_EDIT_OUTPUT + 2, "SysListView32",
+                    WS_CHILD | WS_BORDER | WS_VSCROLL | LVS_REPORT | LVS_SHOWSELALWAYS,
+                    4, 22, 1416, 143
+    // 页 3 监视板：SysTreeView32（原版为 Tree1）
+    CONTROL         "", IDC_EDIT_OUTPUT + 3, "SysTreeView32",
+                    WS_CHILD | WS_BORDER | WS_VSCROLL | TVS_HASBUTTONS | TVS_HASLINES | TVS_LINESATROOT,
+                    4, 22, 1416, 143
+    CONTROL         "", IDC_EDIT_OUTPUT + 4, "SysListView32",
+                    WS_CHILD | WS_BORDER | WS_VSCROLL | LVS_REPORT | LVS_SHOWSELALWAYS,
+                    4, 22, 1416, 143
+    CONTROL         "", IDC_EDIT_OUTPUT + 5, "Edit",
+                    WS_CHILD | WS_BORDER | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY,
+                    4, 22, 1416, 143
+    CONTROL         "", IDC_EDIT_OUTPUT + 6, "Edit",
+                    WS_CHILD | WS_BORDER | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY,
+                    4, 22, 1416, 143
+    // 页 7 剪辑历史：ListBox
+    CONTROL         "", IDC_EDIT_OUTPUT + 7, "ListBox",
+                    WS_CHILD | WS_BORDER | WS_VSCROLL | LBS_NOINTEGRALHEIGHT | LBS_NOTIFY,
+                    4, 22, 1416, 143
+END
+
+// ---------------------------------------------------------------- 窗口组件箱 (右, 原版默认收起)
+// 原版实测（tools\probe_compbox3.py 倒的原版窗口树，dialog 126x415）：
+//   Button "基本组件" (5,5,116x20)  <- 组件组的**下拉框**（原版就是 SysTreeView32 的
+//                                      下拉列表，见 dialog_children 里那个 Tree1(11,11,107x143)）
+//   40 个 Button 28x28，4 列 x 10 行，列距 29（5/34/63/92）、行距 29（34..324）
+//   ⚠️ 本工程改成 **owner-draw 按钮网格**（原版就是按钮，不是 ListView 图标视图）。
+//      按钮 id 用 2150..2189（EC_COMP_BTN_FIRST..），点击 -> EC_WM_ARMUNIT 进放置模式。
+IDD_COMPPANE DIALOG 0, 0, 126, 415
+STYLE DS_CONTROL | WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN
+CAPTION "窗口组件箱"
+FONT 9, "宋体"
+BEGIN
+    // 组下拉框（原版是 SysTreeView32 的下拉；本工程用同形状的 ListBox，只列已载入的组）
+    CONTROL         "", IDC_TAB_COMP, "ListBox",
+                    WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL |
+                    LBS_NOTIFY | LBS_HASSTRINGS | LBS_NOINTEGRALHEIGHT,
+                    5, 5, 116, 20
+    // 组件图标按钮（模板里先放 40 个；FillComponentBox 只显示有组件的那几个）
+    // id = IDC_COMP_BTN_FIRST .. +39（见 resource.h）
+    CONTROL         "", IDC_COMP_BTN_FIRST, "Button", BS_OWNERDRAW | WS_CHILD | WS_VISIBLE,
+                    5, 34, 28, 28
+    CONTROL         "", IDC_COMP_BTN_FIRST + 1, "Button", BS_OWNERDRAW | WS_CHILD | WS_VISIBLE,
+                    34, 34, 28, 28
+    CONTROL         "", IDC_COMP_BTN_FIRST + 2, "Button", BS_OWNERDRAW | WS_CHILD | WS_VISIBLE,
+                    63, 34, 28, 28
+    CONTROL         "", IDC_COMP_BTN_FIRST + 3, "Button", BS_OWNERDRAW | WS_CHILD | WS_VISIBLE,
+                    92, 34, 28, 28
+    CONTROL         "", IDC_COMP_BTN_FIRST + 4, "Button", BS_OWNERDRAW | WS_CHILD | WS_VISIBLE,
+                    5, 63, 28, 28
+    CONTROL         "", IDC_COMP_BTN_FIRST + 5, "Button", BS_OWNERDRAW | WS_CHILD | WS_VISIBLE,
+                    34, 63, 28, 28
+    CONTROL         "", IDC_COMP_BTN_FIRST + 6, "Button", BS_OWNERDRAW | WS_CHILD | WS_VISIBLE,
+                    63, 63, 28, 28
+    CONTROL         "", IDC_COMP_BTN_FIRST + 7, "Button", BS_OWNERDRAW | WS_CHILD | WS_VISIBLE,
+                    92, 63, 28, 28
+    CONTROL         "", IDC_COMP_BTN_FIRST + 8, "Button", BS_OWNERDRAW | WS_CHILD | WS_VISIBLE,
+                    5, 92, 28, 28
+    CONTROL         "", IDC_COMP_BTN_FIRST + 9, "Button", BS_OWNERDRAW | WS_CHILD | WS_VISIBLE,
+                    34, 92, 28, 28
+    CONTROL         "", IDC_COMP_BTN_FIRST + 10, "Button", BS_OWNERDRAW | WS_CHILD | WS_VISIBLE,
+                    63, 92, 28, 28
+    CONTROL         "", IDC_COMP_BTN_FIRST + 11, "Button", BS_OWNERDRAW | WS_CHILD | WS_VISIBLE,
+                    92, 92, 28, 28
+    CONTROL         "", IDC_COMP_BTN_FIRST + 12, "Button", BS_OWNERDRAW | WS_CHILD | WS_VISIBLE,
+                    5, 121, 28, 28
+    CONTROL         "", IDC_COMP_BTN_FIRST + 13, "Button", BS_OWNERDRAW | WS_CHILD | WS_VISIBLE,
+                    34, 121, 28, 28
+    CONTROL         "", IDC_COMP_BTN_FIRST + 14, "Button", BS_OWNERDRAW | WS_CHILD | WS_VISIBLE,
+                    63, 121, 28, 28
+    CONTROL         "", IDC_COMP_BTN_FIRST + 15, "Button", BS_OWNERDRAW | WS_CHILD | WS_VISIBLE,
+                    92, 121, 28, 28
+    CONTROL         "", IDC_COMP_BTN_FIRST + 16, "Button", BS_OWNERDRAW | WS_CHILD | WS_VISIBLE,
+                    5, 150, 28, 28
+    CONTROL         "", IDC_COMP_BTN_FIRST + 17, "Button", BS_OWNERDRAW | WS_CHILD | WS_VISIBLE,
+                    34, 150, 28, 28
+    CONTROL         "", IDC_COMP_BTN_FIRST + 18, "Button", BS_OWNERDRAW | WS_CHILD | WS_VISIBLE,
+                    63, 150, 28, 28
+    CONTROL         "", IDC_COMP_BTN_FIRST + 19, "Button", BS_OWNERDRAW | WS_CHILD | WS_VISIBLE,
+                    92, 150, 28, 28
+    CONTROL         "", IDC_COMP_BTN_FIRST + 20, "Button", BS_OWNERDRAW | WS_CHILD | WS_VISIBLE,
+                    5, 179, 28, 28
+    CONTROL         "", IDC_COMP_BTN_FIRST + 21, "Button", BS_OWNERDRAW | WS_CHILD | WS_VISIBLE,
+                    34, 179, 28, 28
+    CONTROL         "", IDC_COMP_BTN_FIRST + 22, "Button", BS_OWNERDRAW | WS_CHILD | WS_VISIBLE,
+                    63, 179, 28, 28
+    CONTROL         "", IDC_COMP_BTN_FIRST + 23, "Button", BS_OWNERDRAW | WS_CHILD | WS_VISIBLE,
+                    92, 179, 28, 28
+    CONTROL         "", IDC_COMP_BTN_FIRST + 24, "Button", BS_OWNERDRAW | WS_CHILD | WS_VISIBLE,
+                    5, 208, 28, 28
+    CONTROL         "", IDC_COMP_BTN_FIRST + 25, "Button", BS_OWNERDRAW | WS_CHILD | WS_VISIBLE,
+                    34, 208, 28, 28
+    CONTROL         "", IDC_COMP_BTN_FIRST + 26, "Button", BS_OWNERDRAW | WS_CHILD | WS_VISIBLE,
+                    63, 208, 28, 28
+    CONTROL         "", IDC_COMP_BTN_FIRST + 27, "Button", BS_OWNERDRAW | WS_CHILD | WS_VISIBLE,
+                    92, 208, 28, 28
+    CONTROL         "", IDC_COMP_BTN_FIRST + 28, "Button", BS_OWNERDRAW | WS_CHILD | WS_VISIBLE,
+                    5, 237, 28, 28
+    CONTROL         "", IDC_COMP_BTN_FIRST + 29, "Button", BS_OWNERDRAW | WS_CHILD | WS_VISIBLE,
+                    34, 237, 28, 28
+    CONTROL         "", IDC_COMP_BTN_FIRST + 30, "Button", BS_OWNERDRAW | WS_CHILD | WS_VISIBLE,
+                    63, 237, 28, 28
+    CONTROL         "", IDC_COMP_BTN_FIRST + 31, "Button", BS_OWNERDRAW | WS_CHILD | WS_VISIBLE,
+                    92, 237, 28, 28
+    CONTROL         "", IDC_COMP_BTN_FIRST + 32, "Button", BS_OWNERDRAW | WS_CHILD | WS_VISIBLE,
+                    5, 266, 28, 28
+    CONTROL         "", IDC_COMP_BTN_FIRST + 33, "Button", BS_OWNERDRAW | WS_CHILD | WS_VISIBLE,
+                    34, 266, 28, 28
+    CONTROL         "", IDC_COMP_BTN_FIRST + 34, "Button", BS_OWNERDRAW | WS_CHILD | WS_VISIBLE,
+                    63, 266, 28, 28
+    CONTROL         "", IDC_COMP_BTN_FIRST + 35, "Button", BS_OWNERDRAW | WS_CHILD | WS_VISIBLE,
+                    92, 266, 28, 28
+    CONTROL         "", IDC_COMP_BTN_FIRST + 36, "Button", BS_OWNERDRAW | WS_CHILD | WS_VISIBLE,
+                    5, 295, 28, 28
+    CONTROL         "", IDC_COMP_BTN_FIRST + 37, "Button", BS_OWNERDRAW | WS_CHILD | WS_VISIBLE,
+                    34, 295, 28, 28
+    CONTROL         "", IDC_COMP_BTN_FIRST + 38, "Button", BS_OWNERDRAW | WS_CHILD | WS_VISIBLE,
+                    63, 295, 28, 28
+    CONTROL         "", IDC_COMP_BTN_FIRST + 39, "Button", BS_OWNERDRAW | WS_CHILD | WS_VISIBLE,
+                    92, 295, 28, 28
+END

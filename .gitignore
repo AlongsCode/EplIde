@@ -1,0 +1,16 @@
+# 构建产物（build.bat 从 src/ 生成）
+gbk/
+bin/
+*.obj
+*.res
+*.pdb
+*.ilk
+*.exp
+*.lib
+# 截图（对拍产物，随时可重跑）
+shots/
+tools/__pycache__/
+tools/*.obj
+tools/*.pdb
+__pycache__/
+*.pyc

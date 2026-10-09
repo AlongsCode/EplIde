@@ -1,0 +1,2 @@
+// rc_head.rc -- .rc 文件头（构建时与 resource.h / menu_main.rc / panes.rc 拼成单个 EClone.rc）
+#include <afxres.h>

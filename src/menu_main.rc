@@ -1,0 +1,221 @@
+// Generated from e.exe RT_MENU (id=127) - do not edit by hand
+IDR_MAINFRAME MENU
+BEGIN
+        POPUP "F.程序"
+        BEGIN
+            MENUITEM "&N.新建", 57600
+            MENUITEM "&O.打开	Ctrl+O", 57601
+            MENUITEM "&C.关闭", 57602
+            MENUITEM "&S.保存	Ctrl+S", 57603
+            MENUITEM "&A.另存为", 57604
+            MENUITEM "&M.混淆另存为", 33007
+            MENUITEM "&P.打印	Ctrl+P", 32916
+                MENUITEM SEPARATOR
+            MENUITEM "&U.配置", 32875
+            MENUITEM "&L.重新关联名称", 32952
+                MENUITEM SEPARATOR
+            MENUITEM "最近文件", 57616
+                MENUITEM SEPARATOR
+            MENUITEM "&X.退出", 57665
+        END
+        POPUP "E.编辑"
+        BEGIN
+            MENUITEM "&U.撤消	Ctrl+Z", 57643
+            MENUITEM "&R.重复	Ctrl+Y", 57644
+                MENUITEM SEPARATOR
+            MENUITEM "&C.复制	Ctrl+C", 57634
+            MENUITEM "&T.剪切	Ctrl+X", 57635
+            MENUITEM "&P.粘贴	Ctrl+V", 57637
+            MENUITEM "&D.删除行	F10", 32939
+                MENUITEM SEPARATOR
+            MENUITEM "&F.开始寻找	Ctrl+F", 32877
+            MENUITEM "&G.高亮标记待寻找单词	Ctrl+Q/Alt+双击", 33006
+            MENUITEM "&N.寻找下一个	F3", 32878
+            MENUITEM "&V.寻找上一个	Shift+F3", 32879
+            MENUITEM "&H.寻找替换	Ctrl+H", 3
+            MENUITEM "&E.整体搜寻	Ctrl+Alt+F", 32934
+                MENUITEM SEPARATOR
+            POPUP ".收缩展开/屏蔽"
+            BEGIN
+                MENUITEM "&A.收缩", 32927
+                MENUITEM "&X.展开子程序", 32932
+                MENUITEM "&L.展开所有子程序", 32972
+                    MENUITEM SEPARATOR
+                MENUITEM "&G.屏蔽	Ctrl+K", 32936
+                MENUITEM "&B.解除屏蔽	Ctrl+M", 32937
+            END
+            POPUP "L.加到当前块首尾"
+            BEGIN
+                MENUITEM "&I.如果", 32800
+                MENUITEM "&T.如果真", 32801
+                MENUITEM "&S.判断", 32802
+                    MENUITEM SEPARATOR
+                MENUITEM "&D.判断循环首", 32803
+                MENUITEM "&W.循环判断首", 32804
+                MENUITEM "&R.计次循环首", 32805
+                MENUITEM "&F.变量循环首", 32806
+            END
+            POPUP "I.转换为 ->"
+            BEGIN
+                MENUITEM "&I.如果", 32807
+                MENUITEM "&T.如果真", 32808
+                MENUITEM "&S.判断", 32809
+                    MENUITEM SEPARATOR
+                MENUITEM "&D.判断循环首", 32810
+                MENUITEM "&W.循环判断首", 32811
+                MENUITEM "&R.计次循环首", 32812
+                MENUITEM "&F.变量循环首", 32813
+            END
+            MENUITEM "&Z.导入其它程序", 32874
+            MENUITEM "&Y.置为只读状态", 32862
+        END
+        POPUP "V.查看"
+        BEGIN
+            POPUP "T.工具条"
+            BEGIN
+                MENUITEM "&T.标准工具条", 59392
+                MENUITEM "&A.对齐工具条", 133
+                MENUITEM "&K.定位工具条", 135
+                MENUITEM "&S.状态条", 59393
+                MENUITEM "&K.工作窗口切换条", 32963
+                MENUITEM "&W.工作夹	Alt+1", 129
+                MENUITEM "&O.状态夹	Alt+2", 130
+                MENUITEM "&C.工作与状态组合夹	Alt+3", 132
+                MENUITEM "&U.窗口组件箱	Alt+4", 110
+                MENUITEM SEPARATOR
+            END
+            MENUITEM "&D.自定义数据类型表", 32817
+            MENUITEM "&G.全局变量表", 32818
+            MENUITEM "&L.Dll命令定义表", 32819
+            MENUITEM "&C.常量数据表", 32825
+            POPUP "R.资源表"
+            BEGIN
+                MENUITEM "&P.图片资源表", 32826
+                MENUITEM "&S.声音资源表", 32827
+                MENUITEM SEPARATOR
+            END
+            MENUITEM "&J.到最近修改处	Ctrl+Backspace", 32954
+            MENUITEM "&B.设置或取消书签	Ctrl+F6", 32964
+            MENUITEM "&P.到前书签	Shift+F6", 32967
+            MENUITEM "&N.到后书签	F6", 32968
+            MENUITEM "&K.书签跳转	Ctrl+F7", 32965
+                MENUITEM SEPARATOR
+            MENUITEM "&V.预览被设计窗口	Ctrl+Enter", 32850
+        END
+        POPUP "I.插入"
+        BEGIN
+            MENUITEM "&N.现行单元	Ctrl+N", 32783
+                MENUITEM SEPARATOR
+            MENUITEM "&C.类模块", 32929
+            MENUITEM "&M.程序集", 32782
+            MENUITEM "&S.子程序", 32777
+            MENUITEM "&F.窗口", 32831
+            MENUITEM "&D.数据类型", 32778
+            MENUITEM "&G.全局变量	Ctrl+G", 32779
+            MENUITEM "&L.Dll命令", 32780
+            MENUITEM "&T.常量", 32828
+            POPUP "R.资源"
+            BEGIN
+                MENUITEM "&P.图片或图片组", 32829
+                MENUITEM "&S.声音", 32830
+                MENUITEM SEPARATOR
+            END
+            MENUITEM "&A.参数", 32786
+            MENUITEM "&O.局部变量	Ctrl+L", 32787
+                MENUITEM SEPARATOR
+            MENUITEM "&I.文件名	F2", 32946
+        END
+        POPUP "B.数据库"
+        BEGIN
+            MENUITEM "&S.结构编辑器", 32891
+            MENUITEM "&R.记录编辑器", 32892
+            MENUITEM "&L.数据库语言转换", 32917
+            MENUITEM "&C.数据库格式转换", 32897
+            MENUITEM "&P.设置数据库密码", 32915
+                MENUITEM SEPARATOR
+            MENUITEM "&A.加入数据库常量", 32893
+        END
+        POPUP "R.运行"
+        BEGIN
+            MENUITEM "&S.运行	F5", 32854
+            POPUP "M.以指定类型运行->"
+            BEGIN
+                MENUITEM "&1.Windows窗口程序	Ctrl+5", 32989
+                MENUITEM "&2.Windows控制台程序	Ctrl+6", 32990
+                MENUITEM "&3.Windows动态链接库	Ctrl+7", 32991
+                MENUITEM "&4.Windows易语言模块	Ctrl+8", 32992
+            END
+            MENUITEM "&E.终止	Ctrl+F5", 32860
+                MENUITEM SEPARATOR
+            MENUITEM "&V.查看表达式/变量	Shift+F9", 32940
+            MENUITEM "&O.单步跟踪	F8", 32853
+            MENUITEM "&I.单步跟踪进入	Shift+F8", 32852
+            MENUITEM "&U.跟踪返回	Ctrl+Shift+F8", 32867
+            MENUITEM "&R.执行到光标处	Ctrl+F8", 32871
+                MENUITEM SEPARATOR
+            MENUITEM "&T.设置或清除断点	F9", 32855
+            MENUITEM "&A.条件断点	Ctrl+F9", 32945
+            MENUITEM "&C.清除所有断点	Ctrl+Shift+F9", 32858
+                MENUITEM SEPARATOR
+            MENUITEM "&G.到现行执行位置	Ctrl+.", 32870
+            MENUITEM "&N.到运行时错误相关位置", 33008
+        END
+        POPUP "C.编译"
+        BEGIN
+            MENUITEM "&C.编译	F7", 32851
+            MENUITEM "&S.静态编译	Shift+F7", 32912
+            MENUITEM "&D.独立编译", 32911
+            MENUITEM "&P.编译为易包	Ctrl+F10", 32980
+                MENUITEM SEPARATOR
+            POPUP "M.编译为指定类型->"
+            BEGIN
+                MENUITEM "&1.Windows窗口程序	Ctrl+1", 32985
+                MENUITEM "&2.Windows控制台程序	Ctrl+2", 32986
+                MENUITEM "&3.Windows动态链接库	Ctrl+3", 32987
+                MENUITEM "&4.Windows易语言模块	Ctrl+4", 32988
+            END
+            POPUP "T.静态编译为指定类型->"
+            BEGIN
+                MENUITEM "&1.Windows窗口程序	Ctrl+Shift+1", 32993
+                MENUITEM "&2.Windows控制台程序	Ctrl+Shift+2", 32996
+                MENUITEM "&3.Windows动态链接库	Ctrl+Shift+3", 32997
+            END
+            MENUITEM "&I.编译生成安装软件	Ctrl+Shift+F7", 32909
+        END
+        POPUP "T.工具"
+        BEGIN
+            MENUITEM "&M.菜单编辑器	Ctrl+E", 32849
+            MENUITEM "&R.报表编辑器", 32898
+            MENUITEM "&W.执行易向导", 32930
+            MENUITEM "&D.矢量图形设计器", 32970
+                MENUITEM SEPARATOR
+            MENUITEM "&I.安装新的支持库", 32908
+            MENUITEM "&Y.类型库或OCX组件->支持库", 32913
+            MENUITEM "&L.支持库配置", 32906
+            MENUITEM "&O.系统配置", 32876
+                MENUITEM SEPARATOR
+            MENUITEM "&C.数字签名或验证", 33012
+            MENUITEM "&F.在模块及支持库中查找	Ctrl+Shift+F", 33013
+        END
+        POPUP "W.窗口"
+        BEGIN
+            MENUITEM "&C.层叠", 57650
+            MENUITEM "&T.平铺", 57651
+            MENUITEM "&A.排列图标", 57649
+            MENUITEM "&P.分隔", 57653
+            MENUITEM "&L.全部关闭", 32982
+        END
+        POPUP "H.帮助"
+        BEGIN
+            MENUITEM "&H.即时帮助	Ctrl+/ 或 F1", 32894
+            MENUITEM "&E.易语言知识库", 32925
+            MENUITEM "&T.易语言多媒体教程", 32947
+            MENUITEM "&D.每日一贴", 32924
+            MENUITEM "&C.支持库手册及例程", 32884
+                MENUITEM SEPARATOR
+            MENUITEM "&A.关于", 57664
+            MENUITEM "&U.用户反馈表", 32938
+            MENUITEM "&R.购买易语言", 32905
+            MENUITEM "&V.国家级安全检测报告", 32978
+        END
+END

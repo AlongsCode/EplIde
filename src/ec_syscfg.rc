@@ -1,0 +1,272 @@
+// ec_syscfg.rc -- 「系统配置」对话框模板
+//
+// 对照原版 e.exe 的 RT_DIALOG id=282（267x217 对话框单位、78 个控件、
+// SysTabControl32 id=1149）。
+//
+// ★ 页名、每页属于哪些控件：**原版运行时实测**，不是推的 ——
+//   `powershell -File tools\probe_cfgrets.ps1` 会起一份原版、打开这个对话框，
+//   用真鼠标逐个点 7 个页签，倒出「每页可见控件」的**屏幕坐标**
+//   （结果存在 shots\live_syscfg\rects.txt）。实测结果：
+//     [0] 通常  1116/1115/1118/1101/1102/1041/1042/1001/1011/1251/1236/1242
+//     [1] 编 辑 1117/1127/1128/1129/8/1130/1180/1132/1200/1201   （默认输入法 + 编辑行为）
+//     [2] 显示  128/129/1155/149/1135/1137/1139/1122/1004/1124/10/1120/531/11/9/1142/5
+//     [3] 设计  1126/1133/1006/1007/1144/1134/1008/1145/1009/1146/1147
+//     [4] 编译  1165/1166/1168/1169/1170/1136/1140/1138/1141/1240/1235/1241
+//     [5] 存根  1103/1208/1207/1104/1246/1010
+//     [6] 安全  1197/1198/1167/612/613/614
+//   ⚠️ 模板里的**建立次序不是分页次序**（比如「默认输入法」那一组在 id=282 的第 12 行，
+//      却属于第 1 页）。所以页名/归属只能靠运行时实测，别照模板顺序猜。
+//   ⚠️ 页签文字也不在资源里（模板里只有占位 "Tab3"）：页名是从原版截图放大读出来的
+//      （shots\live_syscfg\tabs_zoom2.png）：通常 / 编 辑 / 显示 / 设计 / 编译 / 存根 / 安全。
+//   ⚠️ 第 21 轮以前这里写的是「安全/存根/编译/设计/显示/编辑」（6 个页，名字和次序都错）。
+//
+// 坐标/尺寸/文字全部照 tools\dump_dialogs.py 的输出（shots\e_dialogs.txt 的 DIALOG id=282）
+// 抄；一条命令列全：`python tools\dlg_list.py 282`。
+// 控件 id 沿用原版编号（动态文字用本工程自留的 22xx 段，见 resource.h 的说明）。
+
+IDD_SYSCFG DIALOGEX 0, 0, 272, 218
+STYLE DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "系统配置"
+FONT 9, "宋体"
+BEGIN
+    CONTROL         "", ID_SYSCFG_TAB, "SysTabControl32",
+                    WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | TCS_TABS,
+                    6, 5, 260, 187
+
+    // ================= [0] 通常 =================
+    GROUPBOX        "Windows 窗口程序启动方式", IDC_CFG_G1, 13, 25, 183, 47
+    LTEXT           "系统自动保存编辑现场的间隔时间（分钟），为 0 禁止：", 2210, 15, 115, 209, 8
+    LTEXT           "支持撤消功能时可用内存尺寸（千字节），为 0 不限制：", 2211, 15, 131, 212, 8
+    CONTROL         "通过名称为“_启动窗口”的窗口启动", IDC_CFG_STARTWIN, "Button",
+                    BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP, 22, 41, 168, 8
+    CONTROL         "通过名称为“_启动子程序”的子程序启动", IDC_CFG_STARTSUB, "Button",
+                    BS_AUTORADIOBUTTON | WS_TABSTOP, 22, 55, 168, 8
+    CONTROL         "程序存盘时是否保存 .BAK 备份文件", IDC_CFG_BAK, "Button",
+                    BS_AUTOCHECKBOX | WS_GROUP | WS_TABSTOP, 15, 83, 173, 8
+    CONTROL         "编译发布版本时是否保存入作者信息", IDC_CFG_AUTHOR, "Button",
+                    BS_AUTOCHECKBOX | WS_GROUP | WS_TABSTOP, 15, 99, 236, 8
+    EDITTEXT        IDC_CFG_SAVEMIN,                  228, 113, 31, 12, ES_AUTOHSCROLL | WS_BORDER
+    EDITTEXT        IDC_CFG_UNDOMEM,                  228, 127, 31, 12, ES_AUTOHSCROLL | WS_BORDER
+    LTEXT           "调试编译输出文件名(为空表示使用系统默认文件名):", 2212, 15, 147, 194, 8
+    EDITTEXT        IDC_CFG_DEBUGOUT,                 26, 161, 212, 12, ES_AUTOHSCROLL | WS_BORDER
+    PUSHBUTTON      "...", IDC_CFG_DEBUGBROWSE,       239, 161, 17, 12
+
+    // ================= [1] 编 辑（默认输入法 + 编辑行为） =================
+    GROUPBOX        "默认输入法", IDC_CFG_G2,         23, 35, 110, 63
+    CONTROL         "首拼及全拼", IDC_CFG_IM1, "Button",
+                    BS_AUTORADIOBUTTON | WS_TABSTOP, 33, 51, 79, 8
+    CONTROL         "双拼", IDC_CFG_IM2, "Button",
+                    BS_AUTORADIOBUTTON | WS_TABSTOP, 33, 65, 79, 8
+    CONTROL         "英文", IDC_CFG_IM3, "Button",
+                    BS_AUTORADIOBUTTON | WS_TABSTOP, 33, 79, 79, 8
+    PUSHBUTTON      "编辑名称输入词组(&E)", IDC_CFG_IMEDIT, 147, 62, 94, 19
+    CONTROL         "拼音类输入法支持南方音", IDC_CFG_SOUTH, "Button",
+                    BS_AUTOCHECKBOX | WS_GROUP | WS_TABSTOP, 23, 108, 120, 8
+    CONTROL         "即时输入提示", IDC_CFG_TIP, "Button",
+                    BS_AUTOCHECKBOX | WS_GROUP | WS_TABSTOP, 23, 121, 171, 8
+    CONTROL         "输入新语句行后自动检查并提示语法错误", IDC_CFG_SYNTAX, "Button",
+                    BS_AUTOCHECKBOX | WS_GROUP | WS_TABSTOP, 23, 134, 183, 8
+    LTEXT           "剪辑历史记录数：", 2213,           23, 150, 70, 8
+    EDITTEXT        IDC_CFG_CLIPNUM,                  94, 147, 20, 12, ES_AUTOHSCROLL | WS_BORDER
+
+    // ================= [2] 显示（程序显示：外观开关 + 行距/字体/配色） =================
+    CONTROL         "分支流程线画为虚线", IDC_CFG_FLOWDOT, "Button",
+                    BS_AUTOCHECKBOX | WS_GROUP | WS_TABSTOP, 13, 35, 120, 8
+    CONTROL         "表格线画为虚线", IDC_CFG_GRIDDOT, "Button",
+                    BS_AUTOCHECKBOX | WS_GROUP | WS_TABSTOP, 13, 47, 120, 8
+    CONTROL         "画表格线", IDC_CFG_DRAWGRID, "Button",
+                    BS_AUTOCHECKBOX | WS_GROUP | WS_TABSTOP, 13, 59, 120, 8
+    CONTROL         "画分隔线", IDC_CFG_DRAWSEP, "Button",
+                    BS_AUTOCHECKBOX | WS_GROUP | WS_TABSTOP, 13, 71, 120, 8
+    CONTROL         "画程序分支流程线", IDC_CFG_DRAWFLOW, "Button",
+                    BS_AUTOCHECKBOX | WS_GROUP | WS_TABSTOP, 13, 83, 120, 8
+    CONTROL         "画参数归属线", IDC_CFG_DRAWPARAM, "Button",
+                    BS_AUTOCHECKBOX | WS_GROUP | WS_TABSTOP, 13, 95, 120, 8
+    CONTROL         "显示参数名称", IDC_CFG_SHOWPARAM, "Button",
+                    BS_AUTOCHECKBOX | WS_GROUP | WS_TABSTOP, 13, 107, 120, 8
+    LTEXT           "语句行间距：", 2220,              140, 40, 63, 8
+    EDITTEXT        IDC_CFG_LINEPITCH,                206, 37, 33, 12, ES_AUTOHSCROLL | WS_BORDER | WS_TABSTOP
+    LTEXT           "字体：", 2221,                    140, 67, 31, 8
+    PUSHBUTTON      "设置(&F)", IDC_CFG_FONT,         174, 60, 65, 19
+    LTEXT           "颜色配置：", 2222,                13, 129, 47, 8
+    COMBOBOX        IDC_CFG_SCHEME,                    60, 127, 68, 100,
+                    CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    PUSHBUTTON      "导入(&I)", IDC_CFG_IMPORT,       132, 125, 40, 16
+    PUSHBUTTON      "保存颜色设置(&W)", IDC_CFG_SAVE, 177, 125, 79, 16
+    COMBOBOX        IDC_CFG_COLOR2,                    60, 145, 155, 200,
+                    CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    CONTROL         "", IDC_CFG_COLORBOX, "Button", BS_OWNERDRAW | WS_GROUP, 217, 145, 39, 13
+
+    // ================= [3] 设计（设计器外观） =================
+    LTEXT           "新建窗口宽度：", 2230,            13, 29, 83, 8
+    LTEXT           "新建窗口高度：", 2231,            13, 43, 83, 8
+    EDITTEXT        IDC_CFG_NEWW,                      96, 27, 38, 12, ES_AUTOHSCROLL | WS_BORDER
+    EDITTEXT        IDC_CFG_NEWH,                      96, 41, 38, 12, ES_AUTOHSCROLL | WS_BORDER
+    CONTROL         "是否显示网点", IDC_CFG_GRID, "Button",
+                    BS_AUTOCHECKBOX | WS_GROUP | WS_TABSTOP, 13, 59, 117, 8
+    LTEXT           "网点间隔宽度：", 2232,            13, 73, 83, 8
+    EDITTEXT        IDC_CFG_GRIDW,                     96, 71, 38, 12, ES_AUTOHSCROLL | WS_BORDER
+    LTEXT           "网点间隔高度：", 2233,            13, 87, 83, 8
+    EDITTEXT        IDC_CFG_GRIDH,                     96, 85, 38, 12, ES_AUTOHSCROLL | WS_BORDER
+    CONTROL         "是否对齐到网点", IDC_CFG_SNAP, "Button",
+                    BS_AUTOCHECKBOX | WS_GROUP | WS_TABSTOP, 13, 101, 107, 8
+    CONTROL         "属性表中是否列出设计时不可用或只读性质的属性", IDC_CFG_ROPROP, "Button",
+                    BS_AUTOCHECKBOX | WS_GROUP | WS_TABSTOP, 13, 117, 200, 8
+
+    // ================= [4] 编译 =================
+    CONTROL         "是否启用快速数组访问方式", IDC_CFG_FASTARY, "Button",
+                    BS_AUTOCHECKBOX | WS_GROUP | WS_TABSTOP, 14, 30, 208, 8
+    LTEXT           "选中本选项可以提高数组或字节集成员的访问速度，对以单维方式访问数组成员及访问字节集内字节的速度提高最佳。注意如果启用了本选项，编译后的代码运行时就不会对数组越界访问进行检查，用户必须自己确保程序中不会产生数组越界访问错误才能启用本选项。",
+                    2234, 26, 41, 225, 47
+    CONTROL         "调用DLL命令后是否检查堆栈错误", IDC_CFG_DLLSTK, "Button",
+                    BS_AUTOCHECKBOX | WS_GROUP | WS_TABSTOP, 14, 89, 223, 8
+    LTEXT           "本选项可以避免由于调用一些错误的外部DLL命令而导致程序堆栈错误。", 2235, 26, 99, 223, 18
+    CONTROL         "编译时是否检查死循环代码", IDC_CFG_DEADLOOP, "Button",
+                    BS_AUTOCHECKBOX | WS_GROUP | WS_TABSTOP, 14, 119, 110, 8
+    CONTROL         "严格的重复名称检查", IDC_CFG_DUPNAME, "Button",
+                    BS_AUTOCHECKBOX | WS_GROUP | WS_TABSTOP, 14, 131, 89, 8
+    CONTROL         "严格的参数参考传递检查", IDC_CFG_STRICTREF, "Button",
+                    BS_AUTOCHECKBOX | WS_GROUP | WS_TABSTOP, 125, 131, 100, 8
+    CONTROL         "非独立编译后是否询问写出相关库", IDC_CFG_ASKWRITE, "Button",
+                    BS_AUTOCHECKBOX | WS_GROUP | WS_TABSTOP, 14, 143, 140, 10
+    CONTROL         "数值精度丢失检查", IDC_CFG_PRECLOSS, "Button",
+                    BS_AUTOCHECKBOX | WS_GROUP | WS_TABSTOP, 160, 143, 100, 8
+    LTEXT           "模块编译后自动签名证书:", 2236,    14, 162, 92, 8
+    EDITTEXT        IDC_CFG_SIGNCERT,                 110, 160, 128, 12, ES_AUTOHSCROLL | WS_BORDER
+    PUSHBUTTON      "...", IDC_CFG_SIGNBROWSE,        239, 160, 17, 12
+
+    // ================= [5] 存根（清单） =================
+    CONTROL         "使用预定义的清单:", IDC_CFG_MANIPRE, "Button",
+                    BS_AUTORADIOBUTTON | WS_TABSTOP, 14, 27, 168, 8
+    CONTROL         "是否使用Windows通用组件库6.0版", IDC_CFG_COMCTL6, "Button",
+                    BS_AUTOCHECKBOX | WS_GROUP | WS_TABSTOP, 26, 39, 220, 8
+    CONTROL         "运行前是否请求管理员权限(UAC)", IDC_CFG_UAC, "Button",
+                    BS_AUTOCHECKBOX | WS_GROUP | WS_TABSTOP, 26, 51, 220, 8
+    CONTROL         "使用用户自定义清单:", IDC_CFG_MANIUSER, "Button",
+                    BS_AUTORADIOBUTTON | WS_TABSTOP, 14, 67, 168, 8
+    PUSHBUTTON      "从文件导入(&F)", IDC_CFG_MANIIMPORT, 196, 62, 60, 14
+    EDITTEXT        IDC_CFG_MANITEXT,                  26, 79, 230, 96,
+                    ES_MULTILINE | ES_AUTOVSCROLL | ES_AUTOHSCROLL | WS_BORDER | WS_VSCROLL | WS_HSCROLL
+
+    // ================= [6] 安全（混淆） =================
+    LTEXT           "花指令插入级别：", 2240,           14, 30, 72, 8
+    COMBOBOX        IDC_CFG_JUNKLEVEL,                 93, 28, 30, 100,
+                    CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "如果本选项值不为零将指示编译器在编译生成目的代码时随机插入不同数量的花指令代码，级别越高，所插入花指令代码就越多。花指令代码为无用代码，仅用作增加防止破解和跟踪目的程序的强度。插入花指令代码将导致程序运行速度变慢，且编译生成后的目的程序体积变大，因此除非必要，请保持本选项值为零。",
+                    2241, 26, 44, 225, 90
+    LTEXT           "编译结果打乱码：", 2242,           14, 97, 72, 8
+    EDITTEXT        IDC_CFG_XORCODE,                   93, 95, 30, 12, ES_AUTOHSCROLL | WS_BORDER
+    LTEXT           "如果本选项值不为零将指示编译器使用该打乱码对所编译生成的目的代码及相关支持库文件进行打乱，以避免一些使用落后的特征码查毒技术的杀毒软件产生误报。如果选项值设置为-1将自动使用随机打乱码。建议在编译最终发布版本时启用本选项。",
+                    2243, 26, 111, 225, 60
+
+    DEFPUSHBUTTON   "确认(&O)", ID_SYSCFG_OK,                 136, 191, 57, 19
+    PUSHBUTTON      "取消(&C)", ID_SYSCFG_CANCEL,             201, 191, 57, 19
+    PUSHBUTTON      "置回默认值(&D)", ID_SYSCFG_DEFAULT,       55, 191, 62, 19
+END
+
+// ---------------------------------------------------------------------------
+// 「工具->支持库配置」（原版命令 #32906）
+//
+// 这份模板是**照抄原版 e.exe 的 RT_DIALOG id=321**（322x290 对话框单位、11 个控件）——
+// 坐标/尺寸/风格/控件 ID 全是 dump 出来的原值，见 tools\dump_dialogs.py 的
+// shots\e_dialogs.txt。所以对话框和原版是同一个尺寸、同一套控件位置。
+IDD_LIBCFG DIALOGEX 0, 0, 322, 290
+STYLE DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "请选中所需要使用的支持库（以★开头为COM包装支持库）"
+FONT 9, "宋体"
+BEGIN
+    LTEXT           "查找（可输入拼音字母）：", IDC_LC_LABEL,  7, 10, 28, 8
+    EDITTEXT        IDC_LC_SEARCH,                            40, 7, 275, 12,
+                    ES_AUTOHSCROLL | WS_TABSTOP
+    LISTBOX         IDC_LC_LIST,                              7, 22, 308, 127,
+                    LBS_OWNERDRAWFIXED | LBS_HASSTRINGS | LBS_NOTIFY |
+                    WS_BORDER | WS_VSCROLL | WS_TABSTOP | WS_GROUP
+    EDITTEXT        IDC_LC_DETAILS,                           7, 151, 308, 85,
+                    ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL |
+                    WS_BORDER | WS_VSCROLL
+    LTEXT           "安装新支持库请执行系统菜单“工具->安装新的支持库”后在此处选中使用，然后可以通过“帮助->支持库手册及例程”功能获取其详细帮助信息及例程。",
+                    IDC_LC_HINT,                              7, 242, 308, 19
+    PUSHBUTTON      "购买授权(&B)", IDC_LC_BUY,               7, 265, 49, 18
+    PUSHBUTTON      "全选(&A)", IDC_LC_ALL,                   60, 265, 45, 18
+    PUSHBUTTON      "全不选(&N)", IDC_LC_NONE,                109, 265, 45, 18
+    PUSHBUTTON      "删除(&D)", IDC_LC_DEL,                   158, 265, 45, 18
+    DEFPUSHBUTTON   "确认(&O)", IDOK,                         219, 265, 45, 18
+    PUSHBUTTON      "取消(&C)", IDCANCEL,                     270, 265, 45, 18
+END
+
+// 原版「寻找」对话框 = e.exe RT_DIALOG **id=284**（254x76 对话框单位、5 个控件、样式 0x80C808C0）
+// 控件 id 沿用原版编号：1151 查找文本框(下拉) / 1041 区分大小写 / 1 查找下一个 / 2 取消
+// 复刻依据（随时可复查）：python tools\dialog_inv.py shots\e_dialogs.txt 284
+IDD_FIND DIALOGEX 0, 0, 254, 76
+STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "寻找对话框"
+FONT 9, "宋体"
+BEGIN
+    LTEXT           "欲搜寻文本：", 2260,          7, 10, 53, 8
+    COMBOBOX        IDC_FIND_TEXT,                  66, 7, 181, 135, CBS_DROPDOWN | CBS_AUTOHSCROLL | WS_VSCROLL | WS_TABSTOP
+    CONTROL         "区分大小写", IDC_FIND_CASE, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 7, 30, 62, 8
+    DEFPUSHBUTTON   "搜寻下一个(&F)", IDOK,              105, 53, 64, 16
+    PUSHBUTTON      "取消(&C)", IDCANCEL,            192, 53, 55, 16
+END
+
+// 原版「寻找替换」对话框 = e.exe RT_DIALOG **id=578**（270x82 对话框单位、10 个控件）
+// 控件 id / 坐标 / 中文文字全部照 shots\e_dialogs.txt（**按 UTF-8 读**）抄，别照意思改：
+//   [00] 欲搜寻文本：[01] 替换文本： [02] id=1047 提示行 [03] 1181 搜索框 [04] 1152 替换框
+//   [05] 区分大小写(1041) [06] 搜寻下一个(&F)(1,默认) [07] 替换(&R)(3) [08] 全部替换(&A)(4) [09] 关闭(&C)(2)
+IDD_REPLACE DIALOGEX 0, 0, 270, 82
+STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "寻找替换对话框"
+FONT 9, "宋体"
+BEGIN
+    LTEXT           "欲搜寻文本：", 2262,                  7, 10, 53, 8
+    LTEXT           "替换文本：", 2263,                    7, 26, 53, 8
+    LTEXT           "", IDC_REPL_HINT,                      71, 44, 192, 8
+    COMBOBOX        IDC_REPL_TEXT,                          66, 7, 197, 135, CBS_DROPDOWN | CBS_AUTOHSCROLL | WS_VSCROLL | WS_TABSTOP
+    COMBOBOX        IDC_REPL_WITH,                          66, 23, 197, 135, CBS_DROPDOWN | CBS_AUTOHSCROLL | WS_VSCROLL | WS_TABSTOP
+    CONTROL         "区分大小写", IDC_FIND_CASE, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 7, 44, 62, 8
+    DEFPUSHBUTTON   "搜寻下一个(&F)", IDOK,                  7, 59, 64, 16
+    PUSHBUTTON      "替换(&R)", IDC_REPL_DO,                78, 59, 56, 16
+    PUSHBUTTON      "全部替换(&A)", IDC_REPL_ALL,          141, 59, 56, 16
+    PUSHBUTTON      "关闭(&C)", IDCANCEL,                  207, 59, 56, 16
+END
+
+// 原版「书签跳转」对话框 = e.exe RT_DIALOG **id=607**（408x264 对话框单位、5 个控件）
+// 控件 id / 坐标 / 中文全部照 shots\e_dialogs.txt（**按 UTF-8 读**）抄。
+// ⚠️ 列表的列（标题/宽度）不在模板里（模板里只有 "List1"），本工程按「行号 / 所在行内容」两列做（见 §6）。
+IDD_BOOKMARK DIALOGEX 0, 0, 408, 264
+STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "书签跳转"
+FONT 9, "宋体"
+BEGIN
+    CONTROL         "List1", IDC_BM_LIST, "SysListView32",
+                    LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER | WS_TABSTOP,
+                    7, 7, 394, 221
+    PUSHBUTTON      "删除(&R)", IDC_BM_DEL,               7, 238, 60, 19
+    PUSHBUTTON      "全部删除(&L)", IDC_BM_DELALL,       79, 238, 60, 19
+    DEFPUSHBUTTON   "跳转(&G)", IDOK,                   270, 238, 60, 19
+    PUSHBUTTON      "关闭(&C)", IDCANCEL,               341, 238, 60, 19
+END
+
+// 原版「整体搜寻」对话框 = e.exe RT_DIALOG **id=30773**（254x163 对话框单位、12 个控件）
+// 控件 id / 坐标 / 中文全部照 shots\e_dialogs.txt（**按 UTF-8 读**）抄，别照意思改。
+// ⚠️ 上一轮推测「原版按 Ctrl+F 之后状态夹里出现一个搜索栏」是**错的**：
+//    「搜寻1/搜寻2」是**结果输出夹**（单选），搜索栏就是这个对话框。
+// 复查：python tools\dlg_list.py 30773
+IDD_WHOLEFIND DIALOGEX 0, 0, 254, 163
+STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "整体搜寻对话框"
+FONT 9, "宋体"
+BEGIN
+    LTEXT           "欲搜寻文本：", 2264,            7, 10, 53, 8
+    COMBOBOX        IDC_WF_TEXT,                     66, 7, 181, 135, CBS_DROPDOWN | CBS_AUTOHSCROLL | WS_VSCROLL | WS_GROUP | WS_TABSTOP
+    LTEXT           "搜寻范围：", 2265,              7, 27, 53, 8
+    COMBOBOX        IDC_WF_SCOPE,                    66, 24, 181, 135, CBS_DROPDOWNLIST | WS_VSCROLL | WS_GROUP | WS_TABSTOP
+    CONTROL         "区分大小写", IDC_WF_CASE, "Button", BS_AUTOCHECKBOX | WS_GROUP | WS_TABSTOP, 7, 47, 62, 8
+    CONTROL         "搜寻前自动展开所有被收缩子程序", IDC_WF_EXPAND, "Button", BS_AUTOCHECKBOX | WS_GROUP | WS_TABSTOP, 83, 47, 139, 8
+    GROUPBOX        "搜寻结果列出位置", 2266,         7, 66, 240, 51
+    CONTROL         "“搜寻1”系统输出夹", IDC_WF_PANE1, "Button", BS_AUTORADIOBUTTON | WS_TABSTOP, 28, 83, 159, 8
+    CONTROL         "“搜寻2”系统输出夹", IDC_WF_PANE2, "Button", BS_AUTORADIOBUTTON | WS_TABSTOP, 28, 100, 159, 8
+    DEFPUSHBUTTON   "开始搜寻(&F)", IDOK,            116, 141, 64, 16
+    PUSHBUTTON      "关闭(&C)", IDCANCEL,            192, 141, 55, 16
+    LTEXT           "", IDC_WF_HINT,                  7, 123, 240, 8
+END
