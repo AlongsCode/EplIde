@@ -756,11 +756,13 @@ void ERender::SwitchStmt(int d, std::vector<CString>& out)
     for (int branch = 0; branch < 200 && !s.bad && s.i < s.n; branch++)
     {
         CString cmt;
-        FuncCall(d, false, &cmt);                    // 分支 16B 头
-        unsigned char ct = s.u8();
+        // ⚠️ FuncCall -> ArgsOf 已终消费参数流，**不能再读标记字节**。
+        //   曾经这里多一行 `unsigned char ct = s.u8();`，把下一个 token 吃掉，
+        //   导致后续整段错位（实测 Find By Block.e：ArgsOf 正确停在 186，
+        //   但 Statement 却在 187 读到 0x07）。与第 16 轮修 IfStmt/LoopStmt 同源。
+        FuncCall(d, false, &cmt);                    // 分支 16B 头（参数流已被 ArgsOf 消费）
         CString cond;
-        if (ct == 0x36) { unsigned char t2 = s.u8(); if (t2 != 0x01) { cond = Expr(t2, d + 1); s.u8(); } }
-        out.push_back(cond.IsEmpty() ? CString(_T("判断 ()")) : (_T("判断 (") + cond + _T(")")));
+        out.push_back(_T("判断 ()"));
 
         for (int g2 = 0; g2 < 5000 && !s.bad && s.i < s.n; g2++)
         {
