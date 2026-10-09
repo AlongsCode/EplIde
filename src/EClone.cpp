@@ -2537,6 +2537,37 @@ BOOL CECChildFrame::OnCreateClient(LPCREATESTRUCT, CCreateContext*)
     m_nDoc = ECDOC_ASM;
     m_tabs.SetCurSel(m_nTabOfDoc[nStart]);
     ShowView(nStart == ECDOC_FORM ? 0 : 1);
+
+    // 自动化用：`ECLONE_START_PAGE=gvar|type|const|img|snd|dll|asm` 把启动页切到某页。
+    // 为什么需要：`DumpModel()` 只倒**当前页**建出来的表（表页是同一份源码按 m_nKind 过滤出来的），
+    // 不切页就没法机械验证"全局变量表/自定义数据类型表/常量数据表"的排版。
+    // ⚠️ 不要走 `OpenDoc()`：它在 `n == m_nDoc` 时**提前 return 不重建**，
+    //    而 m_nDoc 初始就是 ECDOC_ASM —— 那样切页会静默不生效（实测踩过）。
+    {
+        TCHAR szPage[64];
+        if (::GetEnvironmentVariable(_T("ECLONE_START_PAGE"), szPage, 64) > 0)
+        {
+            static const int kinds[ECDOC_COUNT] = { ECK_ASM, ECK_ASM, ECK_DLL,
+                                                    ECK_GVAR, ECK_TYPE, ECK_CONST,
+                                                    ECK_IMG, ECK_SND };
+            int nPage = -1;
+            if      (_tcsicmp(szPage, _T("asm"))   == 0) nPage = ECDOC_ASM;
+            else if (_tcsicmp(szPage, _T("dll"))   == 0) nPage = ECDOC_DLL;
+            else if (_tcsicmp(szPage, _T("gvar"))  == 0) nPage = ECDOC_GVAR;
+            else if (_tcsicmp(szPage, _T("type"))  == 0) nPage = ECDOC_TYPE;
+            else if (_tcsicmp(szPage, _T("const")) == 0) nPage = ECDOC_CONST;
+            else if (_tcsicmp(szPage, _T("img"))   == 0) nPage = ECDOC_IMG;
+            else if (_tcsicmp(szPage, _T("snd"))   == 0) nPage = ECDOC_SND;
+            else if (_tcsicmp(szPage, _T("form"))  == 0) nPage = ECDOC_FORM;
+            if (nPage >= 0)
+            {
+                m_editor.SetText((nPage == ECDOC_DLL) ? EcSrcDll() : EcSrcProg());
+                m_editor.SetKind(kinds[nPage]);
+                // DumpModel 是 protected，走 ec_editor 里现成的诊断消息强制重倒一次
+                m_editor.SendMessage(EC_WM_REDUMP, 0, 0);
+            }
+        }
+    }
     return TRUE;
 }
 
@@ -3056,6 +3087,13 @@ BOOL CECloneApp::InitInstance()
     // 自动化取模型用：`EClone.exe <x.e> exit` 建完窗口就退出
     //（SetText 里那句 DumpModel() 已经把模型写到 ECLONE_DUMP_MODEL 指的文件）
     if (g_bExitAfterInit)
+    {
+        // 退出前**强制重倒一次**：切页那一步（ECLONE_START_PAGE）是在子窗口建好之后做的，
+        // 而 SetText 里自动倒的那次用的是切页**之前**的 m_nKind，会把文件覆盖成程序集页的模型。
+        // EC_WM_REDUMP 是 ec_editor 里现成的诊断消息（OnRedump -> DumpModel）。
+        if (pChild != NULL && pChild->GetSafeHwnd() != NULL)
+            pChild->SendMessage(EC_WM_REDUMP, 0, 0);
         ::PostMessage(pFrame->GetSafeHwnd(), WM_CLOSE, 0, 0);
+    }
     return TRUE;
 }

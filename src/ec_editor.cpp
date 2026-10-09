@@ -1371,7 +1371,10 @@ void CECEditor::DumpModel()
     int k, c;
     for (k = 0; k < (int)m_tables.size(); k++)
     {
-        fprintf(f, "TABLE %d cols=%d kind=%d w=", k, m_tables[k].cols, m_tables[k].kind);
+        // kind 是表的排版类别；再补一个 `pkind` = 当前页类别（m_nKind），
+        // 否则只按 kind 分不出"程序集页的变量表"和"全局变量页的表"
+        fprintf(f, "TABLE %d cols=%d kind=%d pkind=%d w=",
+                k, m_tables[k].cols, m_tables[k].kind, m_nKind);
         for (c = 0; c < m_tables[k].cols; c++) fprintf(f, "%d,", m_tables[k].w[c]);
         fprintf(f, "\n");
     }
