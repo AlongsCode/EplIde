@@ -185,6 +185,7 @@ static const TCHAR* g_szSampleCode =
 
 
 
+
 static const TCHAR* g_szSampleDll =
     _T(".版本 2\r\n")
     _T("\r\n")

@@ -84,6 +84,11 @@ static const struct { int slot; COLORREF cr; } g_ecMeasured[] =
     { EC_CS_SUB_HEADER_BG, RGB(230, 237, 228) }, // 子程序表头 #E6EDE4
     { EC_CS_VAR_HEADER_BG, RGB(217, 227, 240) }, // 变量表头   #D9E3F0
     { EC_CS_DATATYPE_FG, RGB(  0,   0, 255) },   // 数据类型   #0000FF
+    { EC_CS_NUMBER_FG,   RGB(128,   0,   0) },   // 数值       #800000
+    //   ↑ 实测：原版截图 #800000 有 189 px（本工程只有 21）；
+    //     作者自己在 ec_editor.cpp:1810 也实测过「数值 = #800000」。
+    //     之前没进这张表 -> 落到 42-DWORD 表的 `[28] 数值前景` = RGB(0,128,0) = #008000
+    //     -> 截图里多出 18 px 纯绿（原版为 0）。
     { EC_CS_MEMBER_FG,   RGB(128,   0,   0) },   // 支持库命令 #800000
     { EC_CS_PARAM_FLAG,  RGB(128,   0,   0) },   // ✔         #800000
     // 编辑器的**选区**底色（原版实测：shots\live_drag\after.png —— 在原版代码编辑器里
