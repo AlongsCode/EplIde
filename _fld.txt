@@ -1,0 +1,70 @@
+2086 // 支持库目录：原版从 <安装目录>\lib 载入。先找 exe 旁边的 lib，再退回本机易语言安装目录。
+2087 static BOOL FindLibDir(CString& out)
+2088 {
+2089     TCHAR sz[MAX_PATH];
+2090     ::GetModuleFileName(NULL, sz, MAX_PATH);
+2091     CString dir = sz;
+2092     int p = dir.ReverseFind(_T('\\'));
+2093     if (p >= 0)
+2094         dir = dir.Left(p);
+2095 
+2096     CString cand;
+2097     cand.Format(_T("%s\\lib"), (LPCTSTR)dir);
+2098     if (::GetFileAttributes(cand + _T("\\krnln.fne")) != 0xFFFFFFFF)
+2099     {
+2100         out = cand;
+2101         return TRUE;
+2102     }
+2103     cand = _T("C:\\Program Files (x86)\\e\\lib");
+2104     if (::GetFileAttributes(cand + _T("\\krnln.fne")) != 0xFFFFFFFF)
+2105     {
+2106         out = cand;
+2107         return TRUE;
+2108     }
+2109     return FALSE;
+2110 }
+2111 
+2112 // ------------------------------------------------------------------ 「工作夹->程序」页树
+2113 // 节点构成照抄原版实测（shots\live_progtree\prog_tree.txt + tree0.png，最小工程 11 个节点）：
+2114 //   程序数据(img8)
+2115 //     启动窗口程序集(img3) -> 子程序(img2)...
+2116 //     窗口(img6) -> _启动窗口(img6)
+2117 //     常量表...(img9)
+2118 //     资源表(img12) -> 声音...(img10) / 图片或图片组...(img11)
+2119 //     模块引用表(img14)
+2120 //     外部文件记录表(img13)
+2121 // 实测的两条规则：
+2122 //   · 全局变量 / 自定义数据类型 / Dll命令 这三类【有内容才出现】——最小工程里一个都没有；
+2123 //     用户那张 精易模块 截图（shots\ref_prog_tree.png）里三者都在，说明是"非空才建节点"。
+2124 //     本工程目前只有 Dll命令 有内容，所以就只多这一个节点。
+2125 //   · 窗口程序集 与 普通程序集 的图标不同（img3 菱形 / 黄色文件夹），见 tools\extract_progtree_icons.py
+2126 // item data = 文档页下标（选中时切页），-1 = 还没有对应文档页。
+2127 static CString EcDeclName(const CString& line, LPCTSTR pszHead)
+2128 {
+2129     // line 形如 ".子程序 加法, 整数型" / ".程序集 启动窗口程序集"，返回逗号/空格后的第一个词
+2130     CString rest = line.Mid(1);
+2131     CString head = rest;
+2132     int sp = -1;
+2133     for (int i = 0; i < rest.GetLength(); i++)
+2134     {
+2135         unsigned char c = (unsigned char)rest[i];
+2136         if (c == ' ' || c == '\t') { sp = i; break; }
+2137     }
+2138     if (sp < 0) return _T("");
+2139     head = rest.Left(sp);
+2140     if (head != pszHead) return _T("");
+2141     CString body = rest.Mid(sp);
+2142     body.TrimLeft();
+2143     int e = 0;
+2144     while (e < body.GetLength() && body[e] != _T(',') && (unsigned char)body[e] != 0xA3) e++;
+2145     CString name = body.Left(e);
+2146     name.TrimRight();
+2147     return name;
+2148 }
+2149 
+2150 static BOOL EcTextHasLine(LPCTSTR psz, LPCTSTR pszHead)
+2151 {
+2152     CString s(psz);
+2153     int a = 0;
+2154     while (a <= s.GetLength())
+2155     {

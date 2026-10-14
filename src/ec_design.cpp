@@ -7,6 +7,7 @@
 #include "ec_design.h"
 #include "ec_lib.h"
 #include "ec_theme.h"      // g_ecCfg：设计器网格 / 新建窗体尺寸（系统配置「设计」页）
+#include "ec_eproj.h"      // g_pEcForms / EcUnitForm / EcUnitBlob（.e 的窗体表）
 
 // 诊断追踪（定义在 ec_editor.cpp）。ECLONE_DUMP_MODEL=<path> 时写到 <path>.trace.txt。
 extern void EcTrace(LPCTSTR pszFmt, ...);
@@ -667,17 +668,67 @@ struct EcOverlayRedrawGuard
     ~EcOverlayRedrawGuard() { g_inOverlayRedraw--; }
 };
 
+// ★★ 设计窗体自己的「8px 点阵」。
+//   判据（逐像素实测）：原版那个 `WTWindow` 的 1:1 图里，**窗体客户区**（不是设计器视图、
+//   也不是覆盖层）上就有点阵：1px 纯黑、间距 = 「系统配置->显示」的网点间距（默认 8）、
+//   锚在**客户区原点**（client (0,0)、(8i,8j) 都有一点）；组件盖住的地方没有点。
+//   本工程原来把点阵画在**视图/覆盖层**上（屏幕上看得见，但 `PrintWindow(窗体)` 拍不到），
+//   所以 1:1 对拍时那一块全是差异（原版有点、我们没有）。这里照原版在**窗体自己**的
+//   WM_PAINT 里补画一遍：先让库把底色画完，再用 GetDC + 排除所有子窗口矩形的方式点上去。
+//   ⚠️ 必须排除子窗口（组件）矩形：GetDC 拿到的 DC 不受 WS_CLIPCHILDREN 约束，
+//   不排除就会把点阵画到"画板1"上面去（实测过）。
+static void EcPaintFormGrid(HWND hwnd)
+{
+    if (hwnd == NULL || !g_ecCfg.bShowGrid)
+        return;
+    int gx = g_ecCfg.nGridW, gy = g_ecCfg.nGridH;
+    if (gx < 2) gx = 2;
+    if (gy < 2) gy = 2;
+    HDC dc = ::GetDC(hwnd);
+    if (dc == NULL)
+        return;
+    RECT rc;
+    ::GetClientRect(hwnd, &rc);
+    HWND c;
+    for (c = ::GetWindow(hwnd, GW_CHILD); c != NULL; c = ::GetWindow(c, GW_HWNDNEXT))
+    {
+        RECT wr;
+        POINT tl, br;
+        if (!::IsWindowVisible(c) || !::GetWindowRect(c, &wr))
+            continue;
+        tl.x = wr.left; tl.y = wr.top;
+        br.x = wr.right; br.y = wr.bottom;
+        ::ScreenToClient(hwnd, &tl);
+        ::ScreenToClient(hwnd, &br);
+        ::ExcludeClipRect(dc, tl.x, tl.y, br.x, br.y);
+    }
+    int x, y;
+    for (y = 0; y < rc.bottom; y += gy)
+        for (x = 0; x < rc.right; x += gx)
+            ::SetPixelV(dc, x, y, RGB(0, 0, 0));
+    ::ReleaseDC(hwnd, dc);
+}
+
 static LRESULT CALLBACK EcFormHookProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     EcFormHook* h = (EcFormHook*)::GetProp(hwnd, EC_FORMPROP_HOOK);
     LRESULT r = (h != NULL && h->oldproc != NULL)
                     ? ::CallWindowProc(h->oldproc, hwnd, msg, wp, lp)
                     : ::DefWindowProc(hwnd, msg, wp, lp);
+    // ★ 设计期的「纸 + 8px 点阵」原版是**窗体自己**画的（见下面 EcPaintFormGrid 的说明）。
+    if (msg == WM_PAINT)
+    {
+        char szNG[8];
+        if (::GetEnvironmentVariableA("ECLONE_NOGRID", szNG, sizeof(szNG)) == 0)
+            EcPaintFormGrid(hwnd);
+    }
     // 这个窗口画完之后，把覆盖层整层补画一次（纸/点阵/框/手柄都在覆盖层上）
     // ⚠️ 必须防重入：`RedrawOverlay()` 内部是 `RDW_UPDATENOW`（同步画），覆盖层一画又会
     //    经过它自己的窗口过程 —— 不挡的话就是无限递归/自我打断，实测症状正是
     //    "navy 像素 0/85/200/232 每次都不一样"。
-    if (h != NULL && h->owner != NULL && !EcInOverlayRedraw() &&
+    char szNO[8];
+    BOOL bSkipOvl = (::GetEnvironmentVariableA("ECLONE_NOOVLHOOK", szNO, sizeof(szNO)) > 0);
+    if (h != NULL && h->owner != NULL && !bSkipOvl && !EcInOverlayRedraw() &&
         (msg == WM_PAINT || msg == WM_ERASEBKGND || msg == WM_NCPAINT ||
          msg == WM_SIZE || msg == WM_MOVE || msg == WM_MDIACTIVATE))
         h->owner->RedrawOverlay();
@@ -686,6 +737,12 @@ static LRESULT CALLBACK EcFormHookProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
 
 void CECDesigner::EcHookFormWindow(HWND hwnd)
 {
+    // 诊断开关：ECLONE_NOFORMHOOK=1 时不钩窗体（用来判断"窗体最后两行没画"是不是这个钩子造成的）
+    {
+        char szNH[8];
+        if (::GetEnvironmentVariableA("ECLONE_NOFORMHOOK", szNH, sizeof(szNH)) > 0)
+            return;
+    }
     if (hwnd == NULL || ::GetProp(hwnd, EC_FORMPROP_HOOK) != NULL)
         return;                                     // 已经钩过（或本来就是我们钩的）
     EcFormHook* h = new EcFormHook;
@@ -757,6 +814,409 @@ LPCTSTR CECDesigner::FormName(int i) const
     if (i < 0 || i >= (int)m_forms.GetSize() || m_forms[i] == NULL)
         return _T("");
     return m_forms[i]->name;
+}
+
+// ★ R4：用打开的真 .e 建**真窗体 + 真组件**。
+//
+// 判据（PLAN_EPARSE.md R3/R4）：程序资源段里每个元素 = [e.exe 自己的头][支持库属性数据]。
+// 于是：
+//   · 窗体尺寸/名字 = 窗体那条元素的 width/height + 记录的 mfc 窗口名；
+//   · 组件 = 把那段属性数据**原样**喂给 ITF 1（`EcCreateUnitWithData`），
+//     几何用元素里的 left/top/width/height —— 和 e.exe 建组件的方式完全一致，
+//     不需要我们自己去解属性表。
+// dataType 高 16 位 = 支持库的 space id（1 = krnln），低 16 位 = 库内数据类型下标。
+// 诊断：ECLONE_DUMP_EPROJ 给了路径时把每一步写 <路径>.des.txt（失败原因一目了然）
+static void EcDesDbg(LPCTSTR pszFmt, ...)
+{
+    TCHAR szP[MAX_PATH * 2];
+    if (::GetEnvironmentVariable(_T("ECLONE_DUMP_EPROJ"), szP, MAX_PATH * 2) <= 0) return;
+    CString sPath = szP; sPath += _T(".des.txt");
+    CStdioFile f; CFileException e;
+    if (!f.Open(sPath, CFile::modeCreate | CFile::modeNoTruncate | CFile::modeWrite | CFile::typeBinary, &e)
+        && !f.Open(sPath, CFile::modeWrite | CFile::typeBinary, &e)) return;
+    f.SeekToEnd();
+    CString s;
+    va_list ap; va_start(ap, pszFmt);
+    s.FormatV(pszFmt, ap);
+    va_end(ap);
+    s += _T("\r\n");
+    f.Write(s, (UINT)s.GetLength());
+    f.Close();
+}
+
+BOOL CECDesigner::BuildFromProject(int nFormIdx)
+{
+    if (g_pEcForms == NULL || nFormIdx < 0 || nFormIdx >= (int)g_pEcForms->size())
+    {
+        EcDesDbg(_T("fail: forms=%p idx=%d"), (const void*)g_pEcForms,
+                 g_pEcForms ? (int)g_pEcForms->size() : -1);
+        return FALSE;
+    }
+    const EcUnitForm& fm = (*g_pEcForms)[nFormIdx];
+    EcDesDbg(_T("form '%s' rect=(%d,%d,%dx%d) units=%u"), (LPCTSTR)fm.name,
+             fm.left, fm.top, fm.width, fm.height, (unsigned)fm.units.size());
+
+    int libWin = -1, dtWin = -1;
+    if (!EcFindType(_T("krnln"), _T("窗口"), &libWin, &dtWin))
+    {
+        EcDesDbg(_T("fail: EcFindType(krnln,窗口)"));
+        return FALSE;
+    }
+    int libKr = EcLibFindByBaseName(_T("krnln"));
+    if (libKr < 0)
+    {
+        EcDesDbg(_T("fail: EcLibFindByBaseName(krnln)=%d"), libKr);
+        return FALSE;
+    }
+
+    // 复用设计器**已有的那个空窗体**（原版打开工程就是"一个窗体"，
+    // 多建一个会让 WTWindow 变两个、尺寸还是新建窗体那套 380x250）。
+    int idx = -1;
+    if (m_forms.GetSize() == 1 && m_forms[0] != NULL && m_forms[0]->units.GetSize() == 0)
+        idx = 0;
+    if (idx == 0)
+    {
+        EcFormInst& fi = *m_forms[0];
+        fi.name = fm.name.IsEmpty() ? _T("_启动窗口") : fm.name;
+        fi.lib  = libWin;
+        fi.dt   = dtWin;
+        fi.cx   = (fm.width  > 0) ? fm.width  : fi.cx;
+        fi.cy   = (fm.height > 0) ? fm.height : fi.cy;
+        if (fi.hwnd != NULL)
+            ::MoveWindow(fi.hwnd, fi.x, fi.y, fi.cx, fi.cy, TRUE);
+    }
+    else
+    {
+        EcFormInst* pfi = new EcFormInst;
+        if (pfi == NULL)
+            return FALSE;
+        pfi->hunit = NULL;
+        pfi->hwnd  = NULL;
+        pfi->lib   = libWin;
+        pfi->dt    = dtWin;
+        pfi->name  = fm.name.IsEmpty() ? _T("_启动窗口") : fm.name;
+        pfi->x     = EC_DESIGN_FORM_X;
+        pfi->y     = EC_DESIGN_FORM_Y;
+        pfi->cx    = (fm.width  > 0) ? fm.width  : 380;
+        pfi->cy    = (fm.height > 0) ? fm.height : 250;
+        m_forms.Add(pfi);
+        idx = (int)m_forms.GetSize() - 1;
+    }
+    if (!SelectForm(idx))
+        return FALSE;
+
+    // ★★ 窗体自己那条元素（dataType 低 16 位 = 1）的属性数据 = 「窗口」类型的 ITF 1 入参。
+    //   我们**复用的那个空窗体**是 NULL 数据建的，标题/边框/底色等属性都不是 .e 里的真值
+    //   （实测判据：原版打开 flowcmd.e 时设计窗体标题 = `流程控制类命令演示`，
+    //    而打开 superlist.e 时**标题为空** —— 后者的窗体元素属性数据里也确实没有那条串；
+    //    两者的 U00 都非空 ⇒ 标题来自**属性数据**，不是程序名）。
+    //   做法（不猜格式）：拿那段数据**临时**建一个"窗口"对象，属性值全部用 ITF 6 读出来，
+    //   再用 ITF 4 写进我们复用的窗体。几何（左边/顶边/宽度/高度）跳过 —— 设计器里窗体
+    //   的位置是设计器定的（原版也钉在视图的 (10,10)），.e 里那两个值是保存时的屏幕坐标。
+    {
+        const EcUnitBlob* pf = NULL;
+        for (size_t q = 0; q < fm.units.size(); q++)
+        {
+            if ((fm.units[q].dataType >> 16) == 1u && (fm.units[q].dataType & 0xFFFFu) == 1u)
+                pf = &fm.units[q];
+        }
+        if (pf != NULL && !pf->blob.empty() && m_forms[idx]->hunit != NULL)
+        {
+            void* htmp = EcCreateUnitWithData(libWin, dtWin,
+                            (LPBYTE)pf->blob.data(), (int)pf->blob.size(),
+                            GetSafeHwnd(), 9001, 0, 0, 200, 100, GetSafeHwnd(), TRUE);
+            if (htmp != NULL)
+            {
+                const EcDataType* dw = EcDtAt(libWin, dtWin);
+                // ★ 不猜属性号：临时对象的**窗口文字**与**窗口样式**直接读出来（系统 API），
+                //   这才是"用 .e 属性数据建出来的窗口"的可观测真值。
+                {
+                    HWND hwT0 = EcUnitHwnd(htmp);
+                    TCHAR szT[512];
+                    szT[0] = 0;
+                    if (hwT0 != NULL)
+                        ::GetWindowText(hwT0, szT, 511);
+                    EcDesDbg(_T("  临时窗口: hwnd=%p text=|%s| style=0x%08X ex=0x%08X"),
+                             (void*)hwT0, szT,
+                             hwT0 ? (unsigned)::GetWindowLong(hwT0, GWL_STYLE) : 0u,
+                             hwT0 ? (unsigned)::GetWindowLong(hwT0, GWL_EXSTYLE) : 0u);
+                    // 把它**当样板**用到复用的窗体上：文字 + 样式（保留 WS_VISIBLE）
+                    if (hwT0 != NULL && m_forms[idx]->hwnd != NULL)
+                    {
+                        if (szT[0] != 0)
+                            ::SetWindowText(m_forms[idx]->hwnd, szT);
+                        // ★ 图标也要跟 .e 一致：原版窗体**没有任何图标**（WM_GETICON small/big
+                        //   全 0，实测 tools\wndproc32.exe 对着两个进程读的）。我们那个"复用的空窗体"
+                        //   带着 krnln 给的默认小图标（WM_GETICON small = 0x100CA97C = krnln 里的资源），
+                        //   系统因此在标题栏左边**留出 18px 图标位**，整条标题文字右移 18px
+                        //   （实测：文字包围盒 原版 x=7..114 / 我们 x=25..132，宽度一致）。
+                        //   这里把三种图标位都清掉（.e 的图标属性在 blob 里，需要时再按属性数据设）。
+                        ::SendMessage(m_forms[idx]->hwnd, WM_SETICON, 0, 0);  // ICON_SMALL
+                        ::SendMessage(m_forms[idx]->hwnd, WM_SETICON, 1, 0);  // ICON_BIG
+                        ::SendMessage(m_forms[idx]->hwnd, WM_SETICON, 2, 0);  // ICON_SMALL2
+                        DWORD stT = (DWORD)::GetWindowLong(hwT0, GWL_STYLE);
+                        stT = (stT & ~(DWORD)WS_VISIBLE) |
+                              ((DWORD)::GetWindowLong(m_forms[idx]->hwnd, GWL_STYLE) &
+                               (DWORD)WS_VISIBLE);
+                        ::SetWindowLong(m_forms[idx]->hwnd, GWL_STYLE, (LONG)stT);
+                        DWORD exT = (DWORD)::GetWindowLong(hwT0, GWL_EXSTYLE);
+                        ::SetWindowLong(m_forms[idx]->hwnd, GWL_EXSTYLE, (LONG)exT);
+                        ::SetWindowPos(m_forms[idx]->hwnd, NULL, 0, 0, 0, 0,
+                                       SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
+                                       SWP_NOACTIVATE | SWP_FRAMECHANGED);
+                        EcDesDbg(_T("  样板已套用到设计窗体（文字+样式）"));
+                    }
+                }
+                // ⚠️ 别再试着"逐属性复制"：实测对本工程这套元数据下标，ITF 6 读窗口类型
+                //    的属性**整片是错位的**（标题读出 41904672、左边读出 2、顶边读出 0xFF000000），
+                //    复制过去等于把垃圾写进窗体，像素上一个点都不变（r3 == r2 逐像素相同）。
+                //    可观测的真值只有两个：**窗口文字**和**窗口样式**，两个都用系统 API 直接搬。
+                HWND hwT = EcUnitHwnd(htmp);
+                if (hwT != NULL) ::DestroyWindow(hwT);
+                EcDestroyUnit(htmp);
+                EcDesDbg(_T("窗体样板用完即毁（临时窗口对象）"));
+            }
+            else
+                EcDesDbg(_T("窗体属性：临时窗口对象建不出来"));
+        }
+        else
+            EcDesDbg(_T("窗体属性：没有窗体元素 / blob 空"));
+    }
+
+    for (size_t k = 0; k < fm.units.size(); k++)
+    {
+        const EcUnitBlob& u = fm.units[k];
+        if ((u.dataType >> 16) != 1u) continue;      // 只认 krnln 的组件（其它库的 space id 不同）
+        // ★★ 库内下标 = (dataType 低 16 位) - 1  —— 5.9 实测，8 个样本类型全部吻合：
+        //   窗体 0x01→下标 0、编辑框 0x05→4、画板 0x08→7、标签 0x0A→9、按钮 0x0B→10、
+        //   通用对话框 0x1F→30、时钟 0x20→31、图形按钮 0x2D→44
+        //   （我们自己的类型表实测：0=窗口 4=编辑框 5=图片框 6=外形框 7=画板 8=分组框 9=标签
+        //     10=按钮 11=选择框 … 30=通用对话框 31=时钟 44=图形按钮 —— ECLONE_DUMP_DTICON 倒出来的）。
+        //   ⚠️ 旧代码直接用低 16 位当下标 ⇒ 差一格：画板被建成"分组框"、按钮被建成"选择框"
+        //      （窗口类名实测是 `Button`，原版是 `_EL_DrawPanel` / `Button`）。
+        int dt = (int)(u.dataType & 0xFFFFu) - 1;
+        if (dt == 0) continue;                       // 窗体自己那条（已经建过了）
+        const EcDataType* d = EcDtAt(libKr, dt);
+        if (d == NULL || d->name.IsEmpty())
+        {
+            dt++;                                    // 万一某天口径变成"低 16 位就是下标"
+            d = EcDtAt(libKr, dt);
+            if (d == NULL) continue;
+        }
+        // ★★ 建组件 = **把元素尾部那段属性数据原样喂给 ITF 1**（和原版 e.exe 同一条路）。
+        //   实测（ECLONE_SCAN_BLOB）：起点 so=0 喂进去，库 ITF 5 回吐**逐字节相同**，
+        //   建出来的窗口类名也对上了（画板 `_EL_DrawPanel`、按钮 `Button`）。
+        //   ⚠️ 以前之所以"喂进去画成纯黑"，真正原因是**类型下标差了一格**（见上面的说明）——
+        //   把画板的属性数据喂给了"分组框"、把按钮的喂给了"选择框"，库当然画成垃圾。
+        //   这段属性数据里**没有几何**：几何走 ITF 1 的 x/y/cx/cy 参数（元素里的 left/top/w/h），
+        //   组件标题等属性在数据里（按钮那条末尾就是 `[4]["测试"]`）。
+        void* hu = NULL;
+        HWND hw = NULL;
+        int dtUse = dt;
+        for (int t = 0; t < 3; t++)
+        {
+            int cand = (t == 0) ? dt : (t == 1 ? dt - 1 : dt + 1);
+            if (cand < 0 || EcDtAt(libKr, cand) == NULL) continue;
+            hu = EcCreateUnitWithData(libKr, cand,
+                        (LPBYTE)u.blob.data(), (int)u.blob.size(),
+                        FormHwnd(), (UINT)(3000 + k), u.left, u.top, u.width, u.height,
+                        // hDesignWnd = **设计窗口**（lib2.h：blInDesignMode 为真时有效，
+                        // 是"设计窗口的窗口句柄"）。原版给的是 IDE 那个设计窗口，不是窗体自己。
+                        // ⚠️ 实测（第 9 轮）：传视图 / 传窗体，1:1 图**逐像素相同**（都是 704 px 差异），
+                        // 所以这条不是为了修像素，只是照 lib2.h 的语义写。
+                        GetSafeHwnd(), TRUE);
+            hw = EcUnitHwnd(hu);
+            if (hu != NULL && hw != NULL) { dtUse = cand; break; }
+            hu = NULL; hw = NULL;
+        }
+        if (hu == NULL || hw == NULL)
+        {
+            // 兜底（数据缺损时才走）：用默认属性数据建 + 显式写几何/标题。
+            // 这一条路是本工程原来的做法，画得"对"但不是 .e 的真值。
+            EcDesDbg(_T("unit %08X dt=%d 喂 .e 数据建窗失败（试过 %d/%d/%d）→ 退默认数据"),
+                     u.id, dt, dt, dt - 1, dt + 1);
+            for (int t2 = 0; t2 < 3 && hu == NULL; t2++)
+            {
+                int cand = (t2 == 0) ? dt : (t2 == 1 ? dt - 1 : dt + 1);
+                if (cand < 0 || EcDtAt(libKr, cand) == NULL) continue;
+                hu = EcCreateUnitDefault(libKr, cand,
+                            FormHwnd(), (UINT)(3000 + k), u.left, u.top, u.width, u.height,
+                            FormHwnd(), TRUE);
+                hw = EcUnitHwnd(hu);
+                if (hu != NULL && hw != NULL) { dtUse = cand; break; }
+                hu = NULL; hw = NULL;
+            }
+            if (hu == NULL || hw == NULL)
+                continue;
+            EcInitUnitGeometry(libKr, dtUse, hu, u.left, u.top, u.width, u.height);
+            EcSetUnitTitle(libKr, dtUse, hu, (LPCTSTR)u.name);
+        }
+        dt = dtUse;
+        if (hw != NULL) ::ShowWindow(hw, SW_SHOW);
+        ::ShowWindow(hw, SW_SHOW);
+        EcUnitInst inst;
+        memset(&inst, 0, sizeof(inst));
+        inst.hunit = hu;
+        inst.hwnd  = hw;
+        inst.lib   = libKr;
+        inst.dt    = dt;
+        lstrcpyn(inst.name, u.name.IsEmpty() ? (LPCTSTR)d->name : (LPCTSTR)u.name, 64);
+        inst.pData = NULL;
+        inst.nData = 0;
+        EcGetAllPropertyData(libKr, dt, hu, &inst.pData, &inst.nData);
+        EcDesDbg(_T("  建出来的类型名='%s'（.e dataType=%08X 低16位=%u → 下标 %d）"),
+                 (LPCTSTR)EcDtAt(libKr, dt)->name, u.dataType, u.dataType & 0xFFFFu, dt);
+        // 标尺：同类型用**默认数据**建一个，读它的规范长度，用来判断我喂的 .e 那段是不是残缺
+        {
+            void* huD = EcCreateUnitDefault(libKr, dt, FormHwnd(), (UINT)(4000 + k),
+                                            u.left, u.top, u.width, u.height, GetSafeHwnd(), TRUE);
+            if (huD != NULL)
+            {
+                BYTE* pD = NULL; int nD = 0;
+                EcGetAllPropertyData(libKr, dt, huD, &pD, &nD);
+                EcDesDbg(_T("  [标尺] dt=%d .e长度=%u 默认长度=%d"), dt,
+                         (unsigned)u.blob.size(), nD);
+                {
+                    CString sDef;
+                    for (int q = 0; q < nD && q < 24; q++)
+                    { CString t; t.Format(_T("%02X"), (unsigned char)pD[q]); sDef += t; }
+                    EcDesDbg(_T("         默认字节=%s"), (LPCTSTR)sDef);
+                }
+                if (pD) delete[] pD;
+                HWND hwD = EcUnitHwnd(huD);
+                if (hwD) ::DestroyWindow(hwD);
+                else { /* 没窗口也算建过，直接销毁对象由库管 */ }
+            }
+            else
+                EcDesDbg(_T("  [标尺] dt=%d 默认建窗失败"), dt);
+        }
+        // ★ 两段式：.e 里那段属性数据后面可能跟着别的东西（我喂的比库要的长）。
+        //   库自己回吐的那份才是**规范长度**；不一样就销毁重建成"恰好这么长"。
+        //   （`EcCreateUnitDefault` 内部就是这么干的，这里照抄它的做法。）
+        if (inst.nData > 0 && inst.nData != (int)u.blob.size())
+        {
+            BYTE* pCanon = new BYTE[inst.nData];
+            if (pCanon != NULL)
+            {
+                memcpy(pCanon, inst.pData, inst.nData);
+                if (inst.pData != NULL) { delete[] inst.pData; inst.pData = NULL; }
+                EcDesDbg(_T("  重新建窗：blob %u -> %d"), (unsigned)u.blob.size(), inst.nData);
+                ::DestroyWindow(hw);
+                inst.hunit = NULL; inst.hwnd = NULL;
+                void* hu2 = EcCreateUnitWithData(libKr, dt, pCanon, inst.nData,
+                                FormHwnd(), (UINT)(3000 + k), u.left, u.top, u.width, u.height,
+                                GetSafeHwnd(), TRUE);
+                HWND hw2 = EcUnitHwnd(hu2);
+                if (hu2 != NULL && hw2 != NULL)
+                {
+                    inst.hunit = hu2; inst.hwnd = hw2;
+                    ::ShowWindow(hw2, SW_SHOW);
+                    EcGetAllPropertyData(libKr, dt, hu2, &inst.pData, &inst.nData);
+                }
+                delete[] pCanon;
+                if (inst.hunit == NULL) continue;      // 重建失败就跳掉这个组件
+            }
+        }
+        // ★★ 诊断（`ECLONE_SCAN_BLOB=1`）：元素尾部那段字节 = 支持库属性数据，
+        //   但**起点**没定死。把起点从 0 到 blob 末尾按 1 字节步进试一遍，
+        //   每试一个就 ITF 1 建一次、ITF 5 读回，把两边的头 8 个 dword 写进 des.txt。
+        //   判据（PLAN_EPARSON §2）：命中正确起点时，ITF 5 回吐的那份应当
+        //   与"默认建一个同类组件"的**形状一致**（画板默认 = [1][2][W][H][0][0]），
+        //   且建出来的窗口类名与原版一致（画板 = `_EL_DrawPanel`、按钮 = `Button`）。
+        {
+            char szScan[8];
+            if (::GetEnvironmentVariableA("ECLONE_SCAN_BLOB", szScan, sizeof(szScan)) > 0)
+            {
+                EcDesDbg(_T("  [scan] unit %08X dt=%d(=%s) blob=%u"), u.id, dt,
+                         (LPCTSTR)d->name, (unsigned)u.blob.size());
+                int so;
+                for (so = 0; so + 8 <= (int)u.blob.size(); so++)
+                {
+                    int nlen = (int)u.blob.size() - so;
+                    void* hs = EcCreateUnitWithData(libKr, dt,
+                                    (LPBYTE)u.blob.data() + so, nlen,
+                                    FormHwnd(), (UINT)(8000 + so), 4, 4, 32, 16,
+                                    FormHwnd(), TRUE);
+                    if (hs == NULL)
+                    {
+                        EcDesDbg(_T("   so=%3d in=%3d 建不出"), so, nlen);
+                        continue;
+                    }
+                    BYTE* pO = NULL;
+                    int nO = 0;
+                    EcGetAllPropertyData(libKr, dt, hs, &pO, &nO);
+                    CString sIn, sOut;
+                    int q;
+                    for (q = 0; q < 8 && so + q * 4 + 4 <= (int)u.blob.size(); q++)
+                    {
+                        CString t;
+                        t.Format(_T("%08X "), *(DWORD*)(u.blob.data() + so + q * 4));
+                        sIn += t;
+                    }
+                    for (q = 0; q < 8 && q * 4 + 4 <= nO; q++)
+                    {
+                        CString t;
+                        t.Format(_T("%08X "), *(DWORD*)(pO + q * 4));
+                        sOut += t;
+                    }
+                    HWND hwS = EcUnitHwnd(hs);
+                    TCHAR szCls[64];
+                    szCls[0] = 0;
+                    if (hwS != NULL)
+                        ::GetClassName(hwS, szCls, 63);
+                    EcDesDbg(_T("   so=%3d in=%3d cls=%-16s out=%2d | %s | %s"),
+                             so, nlen, szCls, nO,
+                             (LPCTSTR)sIn, (LPCTSTR)sOut);
+                    if (nO > 0 && pO != NULL) { delete[] pO; pO = NULL; }
+                    if (hwS != NULL) ::DestroyWindow(hwS);
+                    EcDestroyUnit(hs);
+                }
+            }
+        }
+        // 诊断：库**认没认**我喂进去的 .e blob？
+        //   判据：建完之后库自己回吐的 (ITF 5) 字节若与我喂进去的**逐字节相同** ⇒ 认了；
+        //   若与"默认数据建的"那份相同 ⇒ 库把它当垃圾丢掉了（黑块就是这么来的）。
+        {
+            BOOL bSame = (inst.nData == (int)u.blob.size()) &&
+                         (u.blob.empty() || memcmp(inst.pData, u.blob.data(), u.blob.size()) == 0);
+            CString sIn, sOut;
+            for (size_t b = 0; b < u.blob.size() && b < 24; b++)
+            { CString t; t.Format(_T("%02X"), (unsigned char)u.blob[b]); sIn += t; }
+            for (int q = 0; q < inst.nData && q < 24; q++)
+            { CString t; t.Format(_T("%02X"), (unsigned char)inst.pData[q]); sOut += t; }
+            EcDesDbg(_T("unit %08X dt=%d in=%u out=%d same=%d\r\n   in =%s\r\n   out=%s"),
+                     u.id, dt, (unsigned)u.blob.size(), inst.nData, bSame,
+                     (LPCTSTR)sIn, (LPCTSTR)sOut);
+        }
+        Units().Add(inst);
+    }
+    Select(-1);
+    SyncOverlay();
+    Invalidate(TRUE);
+    // ★★ 设计窗口的**标题栏配色**由"这个窗口是不是活动窗口"决定（实测：本机 HKCU\Control Panel\Colors
+    //    的 ActiveTitle=153,180,209 / GradientActiveTitle=185,209,234 正是原版那条渐变的两端；
+    //    非活动窗口用 InactiveTitle=191,205,219 / GradientInactiveTitle=215,228,242 —— 也就是我们
+    //    之前抓到的那条浅色渐变）。原版的窗体是**活动**状态画的，我们的是非活动 ⇒ 整条标题栏
+    //    每个像素都不同（约占差异的 60%）。
+    //    窗体是子窗口，系统不会自己给它 WM_NCACTIVATE；原版那条链是设计视图在文档激活时转发下来的。
+    //    这里直接补一次（TRUE = 活动），并把非客户区重画。
+    if (m_forms[idx]->hwnd != NULL)
+    {
+        ::SendMessage(m_forms[idx]->hwnd, WM_NCACTIVATE, TRUE, 0);
+        ::RedrawWindow(m_forms[idx]->hwnd, NULL, NULL,
+                       RDW_FRAME | RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+    }
+    // 归属判据（临时开关）：ECLONE_DES_NOOVERLAY=1 时不显示覆盖层 ——
+    // 若画板1 那块随之变回纸色，说明那块像素是**覆盖层**画的（不是组件）。
+    {
+        char szOn[8];
+        if (::GetEnvironmentVariableA("ECLONE_DES_NOOVERLAY", szOn, sizeof(szOn)) > 0)
+        {
+            m_overlay.ShowWindow(SW_HIDE);
+            EcDesDbg(_T("ECLONE_DES_NOOVERLAY：覆盖层已隐藏"));
+        }
+    }
+    return TRUE;
 }
 
 BOOL CECDesigner::CreateNewForm(LPCTSTR pszName)

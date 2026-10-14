@@ -2459,12 +2459,15 @@ class CECChildFrame : public CMDIChildWnd
 {
     DECLARE_DYNAMIC(CECChildFrame)
 public:
+    // ★ 打开真 .e 之后：按 .e 的窗体表把设计器页的窗体/组件真建出来
+    BOOL BuildDesignerFromProject();
     CECChildFrame();
 
 protected:
     CECTabStrip m_tabs;
     CECEditor   m_editor;
     CECDesigner m_designer;
+    BOOL m_bDesFromProj;   // 设计器是否已按打开的 .e 建过窗体/组件（只做一次）
     int         m_nDoc;         // 当前文档页（ECDOC_*）
     int         m_nTabOfDoc[ECDOC_COUNT];   // 页 -> 标签条下标（-1 = 还没打开过）
 
@@ -2587,6 +2590,7 @@ END_MESSAGE_MAP()
 
 CECChildFrame::CECChildFrame() : m_nDoc(ECDOC_ASM)
 {
+    m_bDesFromProj = FALSE;
 }
 
 // 原版 MDI 子窗口的窗口类是 AfxMDIFrame42s（Spy 实测），这里对齐
@@ -2710,15 +2714,50 @@ static LPCTSTR EcDocTitleText(int n)
 
 // 切文档页。程序集页与 Dll命令页各有一段自己的源码文本（原版是两页两套表格）；
 // 表页（全局变量/数据类型/常量/资源）用的是**同一份**源码，只换编辑器的页类别。
+// 主窗口标题。原版实测（tools\win_tree.py 抓 e.exe 主窗口 ENewFrame）：
+//   `流程控制类命令演示 - C:\…\流程类命令.e [无编译条件] - Windows窗口程序 - [程序集: 启动窗口程序集 / _启动窗口]`
+//   ⇒ 前缀来自 .e（程序名称 + 完整路径，见 ec_eproj.cpp 的 EcProjectTitlePrefix），
+//     末尾 `[子窗口标题]` 跟着当前文档页走。没打开 .e 时保留本工程原来的老标题。
+static void EcUpdateFrameTitle(LPCTSTR pszChildTitle)
+{
+    CWnd* pMain = AfxGetMainWnd();
+    if (pMain == NULL) return;
+    CString sPrefix = EcProjectTitlePrefix();
+    if (sPrefix.IsEmpty())
+    {
+        pMain->SetWindowText(_T("易语言-加密狗版 - Windows窗口程序 - [起始页]"));
+        return;
+    }
+    CString s;
+    // 只写前缀：` - [子窗口标题]` 那一段由 MFC 的 MDI 主框架自己补
+    // （实测：本工程这句 SetWindowText 之后立刻读回，Windows 文本已经是 `前缀 - [子窗口标题]`）
+    s.Format(_T("%s"), (LPCTSTR)sPrefix);
+    pMain->SetWindowText(s);
+}
+
 void CECChildFrame::OpenDoc(int n)
 {
     OpenDoc(n, -1);
+}
+
+// 打开 .e 之后：按 .e 的窗体表把设计器页的窗体/组件真建出来（见 ec_design.cpp BuildFromProject）
+BOOL CECChildFrame::BuildDesignerFromProject()
+{
+    return m_designer.BuildFromProject(0);
 }
 
 void CECChildFrame::OpenDoc(int n, int nForm)
 {
     if (n < 0 || n >= ECDOC_COUNT)
         return;
+    // ★ 第一次进设计器页时，按 .e 的窗体表把窗体/组件真建出来。
+    //   放在这里而不是启动时：支持库/属性表都就绪了，且不影响其它页的启动开销。
+    //   ⚠️ 只在"还没建过"时做一次（否则每次切页都会多一个窗体）。
+    if (n == ECDOC_FORM && !m_bDesFromProj)
+    {
+        m_bDesFromProj = TRUE;
+        m_designer.BuildFromProject(0);
+    }
     // 「切换窗体」：点程序树里不同的窗口节点时带着窗体下标进来（见 CPaneBar::OnProgTreeSelChanged）。
     // 先切窗体再切页 —— SelectForm 自己会 Invalidate 设计器。
     if (nForm >= 0 && nForm < m_designer.FormCount())
@@ -2726,6 +2765,7 @@ void CECChildFrame::OpenDoc(int n, int nForm)
     if (m_nTabOfDoc[n] < 0)                 // 这个页还没打开过 -> 加一个标签
         m_nTabOfDoc[n] = m_tabs.AddTab(EcDocTabText(n));
     SetWindowText(EcDocTitleText(n));
+    EcUpdateFrameTitle(EcDocTitleText(n));
     if (n == m_nDoc)
     {
         m_tabs.SetCurSel(m_nTabOfDoc[n]);
@@ -2794,6 +2834,7 @@ void CECChildFrame::SetDocTab(int n)
     m_nDoc = n;
     m_tabs.SetCurSel(m_nTabOfDoc[n]);
     SetWindowText(EcDocTitleText(n));
+    EcUpdateFrameTitle(EcDocTitleText(n));
     ShowView(n == ECDOC_FORM ? 0 : 1);
 }
 
@@ -3193,6 +3234,10 @@ BOOL CECloneApp::InitInstance()
     }
     m_pMainWnd = pFrame;
     EC_SetWindowIcon(pFrame, IDR_MAINFRAME);
+    // ⚠️ MFC 的 MDI 主框架默认带 FWS_ADDTOTITLE：它会在**每次激活时**往当前标题后面
+    //    再补一段 ` - [子窗口标题]`。本工程自己按原版格式拼标题（含那段方括号），
+    //    不清掉这个 style 就会拼出两个尾巴（实测：`… - [程序集: …] - [程序集: …]`）。
+    pFrame->ModifyStyle(FWS_ADDTOTITLE, 0);
     pFrame->ShowWindow(m_nCmdShow);
     pFrame->UpdateWindow();
 
@@ -3204,6 +3249,11 @@ BOOL CECloneApp::InitInstance()
     {
         EC_SetWindowIcon(pChild, IDR_MAINFRAME);   // 菜单条最左端那个图标就是它
         pChild->ShowWindow(SW_SHOWMAXIMIZED);
+        // 标题：打开 .e 时用原版格式（程序名称 - 路径 [无编译条件] - Windows窗口程序 - [子窗口标题]）
+        EcUpdateFrameTitle(_T("程序集: 启动窗口程序集 / _启动窗口"));
+        // ★ 打开真 .e：设计器页按 .e 的窗体表**真建**窗体与组件（几何+属性数据都来自 .e）
+        if (g_bEProject)
+            pChild->BuildDesignerFromProject();
     }
     // 自动化取模型用：`EClone.exe <x.e> exit` 建完窗口就退出
     //（SetText 里那句 DumpModel() 已经把模型写到 ECLONE_DUMP_MODEL 指的文件）

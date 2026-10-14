@@ -27,10 +27,231 @@
 #define ESEG_PROGRAM      0x03007319u
 #define ESEG_RESOURCE     0x04007319u
 #define ESEG_LOSSY        0x05007319u
+#define ESEG_EDITINFO     0x06007319u
 #define ESEG_END          0x07007319u
+#define ESEG_INITMODULE   0x08007319u
+#define ESEG_EDITINFO2    0x09007319u
+#define ESEG_AUXINFO1     0x0A007319u
 #define ESEG_AUXINFO2     0x0B007319u
+#define ESEG_MODREC       0x0C007319u
+#define ESEG_EPKGINFO1    0x0D007319u
+#define ESEG_EDITFILTER   0x0E007319u
+#define ESEG_COMPILECOND  0x0F007319u
+#define ESEG_AUXINFO3     0x10007319u
+#define ESEG_MODREC2      0x11007319u
 
 namespace {
+
+// 正文里的解码诊断行（`' [解码提示] …`）**不是原版行为**，默认关闭。
+// 依据：原版自己的剪贴板文本（tools/text_oracle.py 落到 shots/cmp/orig_sel.txt）里
+// 没有任何提示行 —— 它只画 .e 里真实存在的语句与注释。
+BOOL EcShowDecodeDiag()
+{
+    TCHAR szD[8];
+    return ::GetEnvironmentVariable(_T("ECLONE_SHOW_DECODE_DIAG"), szD, 8) > 0;
+}
+
+// ------------------------------------------------- Resource 段：组件 (id, 名字)
+// EcToGbk 定义在本文件后面（按 GBK→GBK 校验一遍），这里先声明。
+CString EcToGbk(const std::string& raw, UINT srcCp);
+
+// 判据（2026-10 实测，flowcmd.e）：
+//   · AuxInfo1 段给出 `form=52010001 comp=16010003 slot=0 method=04010007`，
+//     而 04010007 就是 `_按钮1_被单击` ⇒ 按钮1 = **0x16010003**（tools/auxinfo_dump.py）；
+//   · 记录的 `[u32 part_count][u32 part_len]` 之后就是 part_data，布局是
+//       `[u32 id × n][u32 offset × n][ (u32 len)(元素) × n ]`（n = part_count）
+//     —— **没有额外的 count/totalSize 前缀**，offset 相对「块区」起点（= part_data + 8n）。
+//     flowcmd.e 实测：n=3，ids={06010000,16010003,16010002}，offsets={0,217,361}，
+//     块区=body+0x18；block0 off=0 → len=213 → 数据在 0x1C（`01 00 01 00`=65537 窗口类型）✓，
+//     block1 off=217 → 0xF1 处 len=140 → 数据在 0xF5（`0B 00 01 00`=65547 按钮）✓，
+//     block2 off=361 → 0x185 处 `08 00 01 00`=65544 画板 ✓（217+4+140=361 正好接上）。
+//   · 元素 = `[I32 dataType][20 字节][+24 处 NUL 结尾的 GBK 名字] …`：
+//     按钮1 的数据起点 0xF5 + 0x18 = 0x10D = `按钮1`，画板1 的 0x185 + 0x18 = 0x19D = `画板1`。
+//   ⇒ 原版渲染器 sub_4C1150 的 case '8' 用 `sub_4C7F10(id,&elem,0)` 查的
+//     「{id→元素*} 全元素表」里就有这些组件，所以正文才能写出 `画板1.滚动写行 (…)`。
+static unsigned int EcRdU32(const std::string& s, size_t o)
+{
+    return (unsigned int)(unsigned char)s[o]
+         | ((unsigned int)(unsigned char)s[o+1] << 8)
+         | ((unsigned int)(unsigned char)s[o+2] << 16)
+         | ((unsigned int)(unsigned char)s[o+3] << 24);
+}
+
+// 名字合法性：1..64 字节、无控制字符（防止把随机的 4 字节 token 当名字）
+static BOOL EcPlausibleName(const std::string& s)
+{
+    if (s.empty() || s.size() > 64) return FALSE;
+    for (size_t k = 0; k < s.size(); k++)
+    {
+        unsigned char c = (unsigned char)s[k];
+        if (c < 0x20 || c == 0x7F) return FALSE;
+    }
+    return TRUE;
+}
+
+static void EcParseResourceComponentNames(const std::string& p, std::vector<CString>& out, UINT cp)
+{
+    if (p.size() < 8) return;
+    size_t i = 4 + (size_t)EcRdU32(p, 0);          // 跳过窗口描述符区
+    for (int guard = 0; guard < 4096; guard++)
+    {
+        if (i + 16 > p.size()) break;
+        size_t q = i + 8;                          // [u32 hash][u32 tag]
+        unsigned int l1 = EcRdU32(p, q); q += 4;   // 窗口名（mfc_string，本函数不用）
+        if (l1 > p.size() - q) break;
+        q += l1;
+        unsigned int l2 = EcRdU32(p, q); q += 4;   // 备注
+        if (l2 > p.size() - q) break;
+        q += l2;
+        if (q + 8 > p.size()) break;
+        unsigned int n    = EcRdU32(p, q);         // [u32 part_count]
+        unsigned int blen = EcRdU32(p, q + 4);     // [u32 part_len]
+        size_t b = q + 8;
+        if (blen == 0 || blen > p.size() - b) break;
+
+        if (n > 0 && n < 4096 && 8 * (size_t)n <= blen)
+        {
+            size_t blocks = b + 8 * (size_t)n;                 // 块区起点
+            for (unsigned int e = 0; e < n; e++)
+            {
+                unsigned int id  = EcRdU32(p, b + 4 * e);
+                unsigned int off = EcRdU32(p, b + 4 * (size_t)n + 4 * e);
+                size_t blk = blocks + off;
+                if (blk + 4 > b + blen) continue;                // 越界保护
+                unsigned int elen = EcRdU32(p, blk);
+                size_t el = blk + 4;
+                if (elen < 28 || el + elen > b + blen) continue;
+                // 数据类型高 16 位 = 0x0001（窗口/组件族），当防错校验
+                if ((EcRdU32(p, el) & 0xFFFF0000u) != 0x00010000u) continue;
+                size_t nm = el + 24;
+                std::string nmS;
+                while (nm < el + elen && p[nm] != '\0' && nmS.size() < 65) { nmS += p[nm]; nm++; }
+                if (!EcPlausibleName(nmS)) continue;
+                CString s;
+                s.Format(_T("%08X|%s"), id, (LPCTSTR)EcToGbk(nmS, cp));
+                out.push_back(s);
+            }
+        }
+        i = b + blen + 12;                         // 12 字节零结尾
+    }
+}
+
+// ===========================================================================
+// 程序资源段（0x04007319）→ 窗体表 + 组件表（设计器要用）
+//
+// 与上面那个启发式函数的分工：那个只抠 (id, 名字) 喂正文渲染的符号表；
+// 这个按**逐字段**顺序解析，把几何、父组件、显示状态、以及**支持库属性数据**
+// （= PFN_CREATE_UNIT 的 pAllData）都取出来，供设计器还原真窗体。
+// 字段序依据：4 个真样本逐字节互证（PLAN_EPARSE.md R3），读法与 e-packager 的
+// ReadFormElements 字段序一致（那是旁证，不作判据）。
+static BOOL EcRdCStr(const std::string& s, size_t& o, std::string& out)
+{
+    size_t e = o;
+    while (e < s.size() && s[e] != '\0') e++;
+    if (e >= s.size()) return FALSE;              // 没有终止符 = 越界
+    out.assign(s.data() + o, e - o);
+    o = e + 1;
+    return TRUE;
+}
+
+static BOOL EcRdMfcStr(const std::string& s, size_t& o, std::string& out)
+{
+    if (o + 4 > s.size()) return FALSE;
+    unsigned int n = EcRdU32(s, o);
+    o += 4;
+    if (n > 65535u || o + (size_t)n > s.size()) return FALSE;
+    out.assign(s.data() + o, n);
+    o += n;
+    return TRUE;
+}
+
+static void EcParseResource(const std::string& res, UINT cp, std::vector<EcUnitForm>& forms)
+{
+    forms.clear();
+    if (res.size() < 16) return;
+    size_t i = 4 + (size_t)EcRdU32(res, 0);     // 跳过「表单描述符区」（8 字节 × 窗口数）
+    while (i + 16 <= res.size())
+    {
+        size_t q = i + 8;                          // [u32 hash][u32 tag]
+        std::string wname, wcmt;
+        if (!EcRdMfcStr(res, q, wname)) break;
+        if (!EcRdMfcStr(res, q, wcmt)) break;
+        if (q + 8 > res.size()) break;
+        unsigned int n    = EcRdU32(res, q);
+        unsigned int blen = EcRdU32(res, q + 4);
+        size_t b = q + 8;
+        if (n == 0 || n > 1024 || blen == 0 || b + blen > res.size() || 8u * n > blen) break;
+        size_t blocks = b + 8 * (size_t)n;         // 块区起点（offset 相对这里）
+
+        EcUnitForm f;
+        f.name    = EcToGbk(wname, cp);
+        f.comment = EcToGbk(wcmt, cp);
+        int fw = 0, fh = 0;
+        for (unsigned int e = 0; e < n; e++)
+        {
+            unsigned int off = EcRdU32(res, b + 4 * (size_t)n + 4 * (size_t)e);
+            size_t blk = blocks + off;
+            if (blk + 4 > b + blen) continue;
+            unsigned int elen = EcRdU32(res, blk);
+            size_t el = blk + 4;
+            if (elen < 32 || el + elen > b + blen) continue;
+
+            EcUnitBlob u;
+            u.id       = EcRdU32(res, b + 4 * (size_t)e);
+            u.dataType = EcRdU32(res, el);
+            size_t o = el + 24;                    // 4 = dataType，20 = 未解字节
+            std::string nm, cm, tag;
+            if (!EcRdCStr(res, o, nm)) continue;
+            if (!EcRdCStr(res, o, cm)) continue;
+            if (o + 20 > el + elen) continue;
+            u.name   = EcToGbk(nm, cp);
+            u.left   = (int)EcRdU32(res, o +  4);
+            u.top    = (int)EcRdU32(res, o +  8);
+            u.width  = (int)EcRdU32(res, o + 12);
+            u.height = (int)EcRdU32(res, o + 16);
+            o += 20;
+            o += 4;                                // unknownBeforeParent
+            u.parent = EcRdU32(res, o); o += 4;
+            unsigned int nch = EcRdU32(res, o);   o += 4;
+            if (o + 4u * nch > el + elen) continue;
+            o += 4u * nch;                          // 子组件 id 表
+            unsigned int clen = EcRdU32(res, o); o += 4;   // cursor
+            if (o + clen > el + elen) continue;
+            o += clen;
+            if (!EcRdCStr(res, o, tag)) continue;   // tag 是 NUL 串（实测：按长度前缀读会把
+                                                    // 后面所有字段推 3 字节，库直接拒收属性流）
+            o += 4;                                 // unknownBeforeVisible
+            if (o + 4 > el + elen) continue;
+            u.showStatus = EcRdU32(res, o); o += 4;
+            o += 4;                                 // tabIndex
+            unsigned int nevt = EcRdU32(res, o); o += 4;
+            if (o + 8u * nevt + 20 > el + elen) continue;
+            o += 8u * nevt;                         // [key,value] × n
+            o += 20;                                // 20 字节（实测全 0）
+            u.blob.assign(res.data() + o, el + elen - o);   // ★ 支持库属性数据
+            if ((u.dataType & 0xFFFFu) == 1u && fw == 0)    // 窗体自己那条 = 窗体几何
+            {
+                f.left = u.left; f.top = u.top; f.width = u.width; f.height = u.height;
+                fw = 1;
+            }
+            f.units.push_back(u);
+        }
+        if (fw == 0) { f.left = f.top = 0; f.width = 0; f.height = 0; }
+        forms.push_back(f);
+
+        size_t nxt = b + blen;
+        BOOL bZeroTail = FALSE;
+        if (nxt + 12 <= res.size())
+        {
+            bZeroTail = TRUE;
+            for (int k = 0; k < 12; k++) if (res[nxt + k] != '\0') { bZeroTail = FALSE; break; }
+        }
+        i = bZeroTail ? (nxt + 12) : nxt;
+        if (i + 16 > res.size()) break;
+    }
+}
+
+static std::vector<EcUnitForm> g_vEForms;
 
 // ==================================================================== 字节游标
 struct EcBuf
@@ -589,6 +810,21 @@ void EcLinePref(std::string& out, const char* pszPrefix, const CString& s)
 // 写法判据：ec_editor.cpp 的解析位置语义
 //   参数   ：名, 类型, 参考|空, 可空|空, 数组|空, 备注
 //   变量   ：名, 类型, 静态|空, 数组|空, 备注
+// 原版的**文本形式**省略尾部空字段：`.子程序 _按钮1_被单击`、`.局部变量 变量1, 整数型`
+// 而不是 `…, , , , `（判据：原版自己的剪贴板文本 tools/text_oracle.py → shots/cmp/orig_sel.txt
+// 第 5/6 行）。屏幕上这些字段是表格列，列由表头决定，不靠这些逗号。
+CString EcTrimTailFields(CString s)
+{
+    for (;;)
+    {
+        s.TrimRight();
+        if (s.Right(2) == _T(", ")) { s = s.Left(s.GetLength() - 2); continue; }
+        if (s.Right(1) == _T(","))  { s = s.Left(s.GetLength() - 1); continue; }
+        break;
+    }
+    return s;
+}
+
 CString EcVarLine(LPCTSTR pszHead, const EcVar& v, UINT cp, BOOL bIsParam, int lib, const EcProgram& prog)
 {
     CString name = EcToGbk(v.name, cp);
@@ -614,7 +850,7 @@ CString EcVarLine(LPCTSTR pszHead, const EcVar& v, UINT cp, BOOL bIsParam, int l
                     (LPCTSTR)name, (LPCTSTR)type, (LPCTSTR)sStatic,
                     (LPCTSTR)sArr, (LPCTSTR)note);
     }
-    return line;
+    return EcTrimTailFields(line);
 }
 
 // 数值/日期 → 文本。整数就按整数写，避免 "2.000000"
@@ -789,9 +1025,248 @@ static DWORD g_dwAppendMs = 0;
 static unsigned g_nBodyLines = 0;
 static unsigned g_nSubs = 0;
 
+// ===========================================================================
+// 段表（e.exe 口径）—— 依据 REA/IDA 伪 C `sub_45B9B0`（读盘总控）
+//
+//   文件 = "CNWTEPRG" + N × [u32 magic=0x15117319][u32 checksum][92 字节段体] + payload
+//     · checksum = `sub_4FF040(段体, 92)` = **4 通道 lane-XOR**（逐字节 buf[i] ^= lane[i&3]，
+//       不是"单字节 XOR 和"；571 个真 .e 全量复现，见 tools\e_sections.py）
+//     · 段体 +0  = 段 key（小端 4 字节）
+//     · 段体 +4  = 段名 30 字节，解码 `Name[i] ^= Key[(i+1)%4]`（`sub_4FF010`），内容是 **GBK**
+//       —— 5.9 实测是中文：系统信息段 / 用户信息段 / 程序资源段 / 程序段 / 初始模块段 /
+//       可丢失程序段 / 编辑信息段2 / 辅助信息段1 / "s"(End)（旧文档写的英文名是照 4.0 猜的）
+//     · 段体 +36 = index，读盘时按 1,2,3… 逐段校验
+//     · 段体 +48 = payload 长度；payload 紧跟 100 字节段头，读完整段后 seek 到 位置+size
+//       （**不信任读者**：读者少读了就 seek 过去，多读了就 seek 回来 + 记一条提示）
+struct EcSegInfo
+{
+    unsigned int idx;
+    unsigned int key;
+    CString      name;
+    unsigned int size;
+    size_t       off;
+    BOOL         ckOk;
+    BOOL         idxOk;
+};
+
+struct EcEventBind          // 辅助信息段1 的一条：组件事件 → 子程序
+{
+    unsigned int form, comp, slot, method;
+};
+
+static std::vector<EcSegInfo>   g_vESegs;        // 本文件的段表（倒档/诊断用）
+static std::vector<EcEventBind> g_vEEventBinds;  // 辅助信息段1 解出的绑定表
+static std::vector<CString>     g_vEUserStrings; // 用户信息段的 10 个字符串（U00 = 程序名称）
+static CString                  g_sEProjPath;    // 最近一次打开的 .e 全路径（原版标题里带它）
+
+static unsigned int EcRd32At(const std::string& s, size_t o)
+{
+    return (unsigned int)(unsigned char)s[o]
+         | ((unsigned int)(unsigned char)s[o+1] << 8)
+         | ((unsigned int)(unsigned char)s[o+2] << 16)
+         | ((unsigned int)(unsigned char)s[o+3] << 24);
+}
+
+static unsigned int EcRd32Raw(const unsigned char* p)
+{
+    return (unsigned int)p[0] | ((unsigned int)p[1] << 8)
+         | ((unsigned int)p[2] << 16) | ((unsigned int)p[3] << 24);
+}
+
+// `sub_4FF040`：4 通道 lane-XOR 校验和
+static unsigned int EcLaneXor(const unsigned char* p, size_t n)
+{
+    unsigned char lane[4] = { 0, 0, 0, 0 };
+    for (size_t i = 0; i < n; i++) lane[i & 3] ^= p[i];
+    return (unsigned int)lane[0]
+         | ((unsigned int)lane[1] << 8)
+         | ((unsigned int)lane[2] << 16)
+         | ((unsigned int)lane[3] << 24);
+}
+
+// `sub_4FF010`：段名解码 Name[i] ^= Key[(i+1)%4]（GBK 文本）
+static CString EcSegNameDecode(const unsigned char* body, unsigned int key)
+{
+    unsigned char k[4];
+    k[0] = (unsigned char)(key      );
+    k[1] = (unsigned char)(key >>  8);
+    k[2] = (unsigned char)(key >> 16);
+    k[3] = (unsigned char)(key >> 24);
+    std::string s;
+    for (int i = 0; i < 30; i++)
+    {
+        unsigned char c = (unsigned char)(body[4 + i] ^ k[(i + 1) & 3]);
+        if (c == 0) break;
+        s += (char)c;
+    }
+    return EcToGbk(s, 936);
+}
+
+// 段 key → 中文名（名字本身也从段体里解出来；这张表只给"key 有意义但段名不可读"时兜底）
+static LPCTSTR EcSegKeyName(unsigned int key)
+{
+    switch (key)
+    {
+    case ESEG_USERINFO:    return _T("用户信息段");
+    case ESEG_SYSINFO:     return _T("系统信息段");
+    case ESEG_PROGRAM:     return _T("程序段");
+    case ESEG_RESOURCE:    return _T("程序资源段");
+    case ESEG_LOSSY:       return _T("可丢失程序段");
+    case ESEG_EDITINFO:    return _T("编辑信息段");
+    case ESEG_END:         return _T("End");
+    case ESEG_INITMODULE:  return _T("初始模块段");
+    case ESEG_EDITINFO2:   return _T("编辑信息段2");
+    case ESEG_AUXINFO1:    return _T("辅助信息段1");
+    case ESEG_AUXINFO2:    return _T("辅助信息段2");
+    case ESEG_MODREC:      return _T("易模块记录段");
+    case ESEG_EPKGINFO1:   return _T("易包信息段1");
+    case ESEG_EDITFILTER:  return _T("编辑过滤段");
+    case ESEG_COMPILECOND: return _T("编译条件信息段");
+    case ESEG_AUXINFO3:    return _T("辅助信息段3");
+    case ESEG_MODREC2:     return _T("易模块记录段2");
+    }
+    return _T("(未知段)");
+}
+
+// 用户信息段（`sub_4556F0` 读侧）：
+//   10 个 CString（[u32 len][len 字节]）+ 5 个 u32 + 20 字节 + u32 + 4 字节
+//   实测 flowcmd.e：size=138，解析消费 138/138（逐字节吻合）；
+//   U00 = 程序名称（原版标题栏第一段）、U01 = 程序说明。
+static void EcParseUserInfo(const unsigned char* pay, unsigned int size, std::vector<CString>& out)
+{
+    size_t q = 0;
+    std::vector<std::string> ss;
+    for (int i = 0; i < 10; i++)
+    {
+        if (q + 4 > size) { ss.clear(); break; }
+        unsigned int sl = (unsigned int)pay[q]
+                        | ((unsigned int)pay[q+1] << 8)
+                        | ((unsigned int)pay[q+2] << 16)
+                        | ((unsigned int)pay[q+3] << 24);
+        q += 4;
+        if (sl > size - q) { ss.clear(); break; }
+        ss.push_back(std::string((const char*)pay + q, sl));
+        q += sl;
+    }
+    // ⚠️ VC6 的 for-init 变量作用域是**外层**作用域（不是循环体），所以每个循环要用不同名字
+    for (size_t k = 0; k < ss.size(); k++) out.push_back(EcToGbk(ss[k], 936));
+}
+
+// ECLONE_DUMP_EPROJ 给了路径时，把段表 + 用户信息段 + 事件绑定写到 <路径>.segs.txt（GBK）
+static void EcDumpSegsIfAsked()
+{
+    TCHAR szDump[MAX_PATH * 2];
+    if (::GetEnvironmentVariable(_T("ECLONE_DUMP_EPROJ"), szDump, MAX_PATH * 2) <= 0) return;
+    CString sPath = szDump;
+    sPath += _T(".segs.txt");
+    CStdioFile f;
+    CFileException e;
+    if (!f.Open(sPath, CFile::modeCreate | CFile::modeWrite | CFile::typeBinary, &e)) return;
+    CString line;
+    line.Format(_T("idx key      name                 size   ck idx\r\n"));
+    f.Write(line, (UINT)line.GetLength());
+    for (size_t a = 0; a < g_vESegs.size(); a++)
+    {
+        const EcSegInfo& s = g_vESegs[a];
+        line.Format(_T("%2u  %08X %-20s %-6u %s %s\r\n"),
+                    s.idx, s.key, (LPCTSTR)s.name, s.size,
+                    s.ckOk ? _T("ok ") : _T("BAD"), s.idxOk ? _T("ok") : _T("BAD"));
+        f.Write(line, (UINT)line.GetLength());
+    }
+    line.Format(_T("userStrings=%u\r\n"), (unsigned)g_vEUserStrings.size());
+    f.Write(line, (UINT)line.GetLength());
+    for (size_t b = 0; b < g_vEUserStrings.size(); b++)
+    {
+        line.Format(_T("  U%02u %s\r\n"), (unsigned)b, (LPCTSTR)g_vEUserStrings[b]);
+        f.Write(line, (UINT)line.GetLength());
+    }
+    line.Format(_T("eventBinds=%u\r\n"), (unsigned)g_vEEventBinds.size());
+    f.Write(line, (UINT)line.GetLength());
+    for (size_t c = 0; c < g_vEEventBinds.size(); c++)
+    {
+        const EcEventBind& b = g_vEEventBinds[c];
+        line.Format(_T("  form=%08X comp=%08X slot=%u method=%08X\r\n"),
+                    b.form, b.comp, b.slot, b.method);
+        f.Write(line, (UINT)line.GetLength());
+    }
+    // 窗体表（程序资源段逐字段解析的结果；与 tools\e_resource.py 的输出应逐字段相同）
+    line.Format(_T("forms=%u\r\n"), (unsigned)g_vEForms.size());
+    f.Write(line, (UINT)line.GetLength());
+    for (size_t fm = 0; fm < g_vEForms.size(); fm++)
+    {
+        const EcUnitForm& r = g_vEForms[fm];
+        line.Format(_T("  FORM %s [%s] rect=(%d,%d,%dx%d) units=%u\r\n"),
+                    (LPCTSTR)r.name, (LPCTSTR)r.comment,
+                    r.left, r.top, r.width, r.height, (unsigned)r.units.size());
+        f.Write(line, (UINT)line.GetLength());
+        for (size_t un = 0; un < r.units.size(); un++)
+        {
+            const EcUnitBlob& u = r.units[un];
+            line.Format(_T("    id=%08X dt=%08X %-24s (%d,%d,%dx%d) parent=%08X blob=%u\r\n"),
+                        u.id, u.dataType, (LPCTSTR)u.name,
+                        u.left, u.top, u.width, u.height, u.parent, (unsigned)u.blob.size());
+            f.Write(line, (UINT)line.GetLength());
+        }
+    }
+    f.Close();
+}
+
+// ---- 给上层用的取值口 ----
+LPCTSTR EcProjectName()
+{
+    return g_vEUserStrings.size() > 0 ? (LPCTSTR)g_vEUserStrings[0] : _T("");
+}
+
+LPCTSTR EcProjectDesc()
+{
+    return g_vEUserStrings.size() > 1 ? (LPCTSTR)g_vEUserStrings[1] : _T("");
+}
+
+// 原版标题栏的**前缀**（实测 tools\win_tree.py 抓 e.exe 主窗口）：
+//   `流程控制类命令演示 - C:\…\流程类命令.e [无编译条件] - Windows窗口程序 - [程序集: … / …]`
+//   ⇒ 前缀 = `<程序名称> - <完整路径> [无编译条件] - Windows窗口程序`，后面的 `[子窗口标题]`
+//     由 MFC/主框架拼（本工程在 EcUpdateFrameTitle 里拼）。
+//   `[无编译条件]` 的原版依据：编译条件信息段（0x0F007319）不存在时才有这一段；
+//   flowcmd.e 没有该段，实测标题里就是 `[无编译条件]`。
+LPCTSTR EcProjectTitlePrefix()
+{
+    if (g_vEUserStrings.empty() || g_vEUserStrings[0].IsEmpty() || g_sEProjPath.IsEmpty())
+        return _T("");
+    static CString s;                       // 静态：调用方直接 SetWindowText
+    CString sCond = _T(" [无编译条件]");
+    for (size_t z = 0; z < g_vESegs.size(); z++)
+        if (g_vESegs[z].key == ESEG_COMPILECOND) sCond = _T("");   // 有编译条件段就不写这四个字
+    s.Format(_T("%s - %s%s - Windows窗口程序"),
+             (LPCTSTR)g_vEUserStrings[0], (LPCTSTR)g_sEProjPath, (LPCTSTR)sCond);
+    return s;
+}
+
+int EcProjectEventBindCount()
+{
+    return (int)g_vEEventBinds.size();
+}
+
+BOOL EcProjectEventBindAt(int i, unsigned int* pForm, unsigned int* pComp,
+                          unsigned int* pSlot, unsigned int* pMethod)
+{
+    if (i < 0 || i >= (int)g_vEEventBinds.size()) return FALSE;
+    const EcEventBind& b = g_vEEventBinds[i];
+    if (pForm)   *pForm   = b.form;
+    if (pComp)   *pComp   = b.comp;
+    if (pSlot)   *pSlot   = b.slot;
+    if (pMethod) *pMethod = b.method;
+    return TRUE;
+}
+
+// ⚠️ 这个定义必须放在**文件作用域**（即匿名 namespace 之外）：
+//    放在匿名 namespace 里会与外层头文件里的 extern 声明构成「同名两实体」，
+//    VC6 在调用点直接报 C2872 ambiguous symbol（试过换成函数返回也一样报 C2668）。
+const std::vector<EcUnitForm>* g_pEcForms = &g_vEForms;
+
 BOOL EcLoadEProject(LPCTSTR pszPath, CString& strOut)
 {
     strOut.Empty();
+    g_sEProjPath = pszPath;          // 原版标题栏前缀里要带完整路径
     DWORD dwT0 = ::GetTickCount();
     DWORD dwT1 = 0, dwT2 = 0, dwT3 = 0;
 
@@ -838,18 +1313,29 @@ BOOL EcLoadEProject(LPCTSTR pszPath, CString& strOut)
     // ---- 1. 遍历段表，找 SystemInfo（拿语言码）与 Program ----
     UINT cp = 936;                       // 默认 GBK，SystemInfo 语言码可以改它
     std::string progPayload;
+    std::string resPayloadAll;           // Resource 段体内含窗口/组件数据（见 EcParseResourceComponentNames）
     // ⚠️ 自定义常量表在**程序资源段**（第 42 轮实证，见 EcParseUserConsts 的说明）。
     //    程序段里没有它 —— 在程序段尾部读只会拿到 "dwNumberOfBytesWritten" 垃圾。
     std::map<unsigned int, std::string> userConstNames;
     {
         size_t pos = 8;
+        unsigned int nExpectIdx = 1;     // e.exe：段序从 1 起，逐段比对段体 +36
+        g_vESegs.clear();
+        g_vEEventBinds.clear();
+        g_vEUserStrings.clear();
         while (pos + 100 <= len)
         {
             unsigned int magic = (unsigned int)(unsigned char)data[pos]
                                | ((unsigned int)(unsigned char)data[pos+1] << 8)
                                | ((unsigned int)(unsigned char)data[pos+2] << 16)
                                | ((unsigned int)(unsigned char)data[pos+3] << 24);
-            if (magic != 0x15117319u) break;
+            // `sub_45B9B0`：magic 不对就是硬失败（原版走清理路径返回 0）
+            if (magic != 0x15117319u)
+            {
+                CString s; s.Format(_T("seg magic @%u"), (unsigned)pos);
+                EcDbgFail(_T("seg_magic"), s);
+                return FALSE;
+            }
 
             unsigned int segKey = (unsigned int)(unsigned char)data[pos+8]
                                 | ((unsigned int)(unsigned char)data[pos+9] << 8)
@@ -859,6 +1345,53 @@ BOOL EcLoadEProject(LPCTSTR pszPath, CString& strOut)
                               | ((unsigned int)(unsigned char)data[pos+57] << 8)
                               | ((unsigned int)(unsigned char)data[pos+58] << 16)
                               | ((unsigned int)(unsigned char)data[pos+59] << 24);
+
+            // ---- 段头校验（照 `sub_45B9B0`）：checksum = lane-XOR(92 字节段体)，index 递增 ----
+            EcSegInfo si;
+            si.idx   = nExpectIdx;
+            si.key   = segKey;
+            si.size  = size;
+            si.off   = pos + 100;
+            si.ckOk  = (EcLaneXor((const unsigned char*)data.data() + pos + 8, 92)
+                        == EcRd32At(data, pos + 4));
+            si.idxOk = (EcRd32At(data, pos + 8 + 36) == nExpectIdx);
+            si.name  = EcSegNameDecode((const unsigned char*)data.data() + pos + 8, segKey);
+            if (si.name.IsEmpty()) si.name = EcSegKeyName(segKey);
+            g_vESegs.push_back(si);
+            if (!si.ckOk || !si.idxOk)
+            {
+                CString s;
+                s.Format(_T("seg idx=%u key=%08X size=%u ck=%s idx=%s"),
+                         si.idx, segKey, size,
+                         si.ckOk ? _T("ok") : _T("BAD"), si.idxOk ? _T("ok") : _T("BAD"));
+                EcDbgFail(_T("seg_header"), s);
+                return FALSE;
+            }
+            if (pos + 100 + (size_t)size > len)
+            {
+                CString s; s.Format(_T("seg @%u size=%u overruns"), (unsigned)pos, size);
+                EcDbgFail(_T("seg_overrun"), s);
+                return FALSE;
+            }
+            const unsigned char* pay = (const unsigned char*)data.data() + pos + 100;
+
+            if (segKey == ESEG_USERINFO)
+                EcParseUserInfo(pay, size, g_vEUserStrings);
+
+            if (segKey == ESEG_AUXINFO1)
+            {
+                // 辅助信息段1：16 字节/条 [form][组件ID][事件槽][子程序ID]
+                // （实测 flowcmd.e：1 条 = 52010001 / 16010003 / 0 / 04010007 = _按钮1_被单击）
+                for (size_t q = 0; q + 16 <= (size_t)size; q += 16)
+                {
+                    EcEventBind b;
+                    b.form   = EcRd32Raw(pay + q     );
+                    b.comp   = EcRd32Raw(pay + q +  4);
+                    b.slot   = EcRd32Raw(pay + q +  8);
+                    b.method = EcRd32Raw(pay + q + 12);
+                    g_vEEventBinds.push_back(b);
+                }
+            }
 
             if (segKey == ESEG_SYSINFO && size >= 12)
             {
@@ -879,6 +1412,7 @@ BOOL EcLoadEProject(LPCTSTR pszPath, CString& strOut)
                 // 就地解析：资源段常量表 -> id -> 名字（用于渲染 `#常量名`）
                 std::string resPayload;
                 resPayload.assign(data, pos + 100, size);
+                resPayloadAll = resPayload;
                 std::vector<EcEpConst> ucon;
                 if (EcParseUserConsts(resPayload, ucon))
                 {
@@ -890,8 +1424,14 @@ BOOL EcLoadEProject(LPCTSTR pszPath, CString& strOut)
             }
 
             pos += 100 + size;
+            nExpectIdx++;
             if (segKey == ESEG_END) break;
         }
+        // 资源段 -> 窗体表/组件表（设计器用）。放在循环之后：这时语言码（cp）已经确定。
+        g_vEForms.clear();
+        if (!resPayloadAll.empty())
+            EcParseResource(resPayloadAll, cp, g_vEForms);
+        EcDumpSegsIfAsked();
     }
     if (progPayload.empty()) return FALSE;
 
@@ -1056,6 +1596,78 @@ BOOL EcLoadEProject(LPCTSTR pszPath, CString& strOut)
                     EcToGbk(prog.methods[symM].locals[symV].name, cp));
     }
 
+    // 组件（窗体上的控件）也是同一张表的元素：从 Resource 段取 (id, 名字)。
+    // 少了这一块，正文里 `画板1.滚动写行 (…)` 就会退化成 `滚动写行 (var_16010002, …)`。
+    {
+        std::vector<CString> compSyms;
+        EcParseResourceComponentNames(resPayloadAll, compSyms, cp);
+        // 再加一遍**逐字段解析**出来的组件名/窗体名（新解析器：几何 + blob 都拿得到，
+        // 名字也更可信）。两条来源都进表，谁有名字用谁 —— 保证不因换解析器丢名字。
+        {
+            const std::vector<EcUnitForm>* pf = g_pEcForms;
+            for (size_t fI = 0; pf != NULL && fI < pf->size(); fI++)
+            {
+                const EcUnitForm& fm = (*pf)[fI];
+                for (size_t uI = 0; uI < fm.units.size(); uI++)
+                {
+                    const EcUnitBlob& ub = fm.units[uI];
+                    if (ub.name.IsEmpty()) continue;
+                    CString s;
+                    s.Format(_T("%08X|%s"), ub.id, (LPCTSTR)ub.name);
+                    compSyms.push_back(s);
+                }
+            }
+        }
+        for (size_t symR = 0; symR < compSyms.size(); symR++)
+            symTable.push_back(compSyms[symR]);
+    }
+
+    // 诊断（ECLONE_DUMP_SYMS=<path>）：把**最终**符号表整张倒出来（id|名字）。
+    // 用途：判定正文里的 `var_%08X` 到底是"不在表里"还是"键口径不对"——
+    //   把这里 dump 出来的 id 与正文里出现的 id 直接比即可，不用从截图反推。
+    {
+        TCHAR szS[MAX_PATH];
+        if (::GetEnvironmentVariable(_T("ECLONE_DUMP_SYMS"), szS, MAX_PATH) > 0)
+        {
+            FILE* fS = _tfopen(szS, _T("w"));
+            if (fS != NULL)
+            {
+                fprintf(fS, "count=%d\n", (int)symTable.size());
+                for (size_t sk = 0; sk < symTable.size(); sk++)
+                    fprintf(fS, "%s\n", (LPCSTR)symTable[sk]);   // 表项本来就是 GBK
+                // 分作用域列出 id：判定"某个元素 id 到底是没解析到，还是标签口径不同"
+                fprintf(fS, "-- asms (%d) --\n", (int)prog.asms.size());
+                for (size_t daj = 0; daj < prog.asms.size(); daj++)
+                {
+                    fprintf(fS, "asm %08X %s vars=%d\n", (unsigned)prog.asms[daj].id,
+                            (LPCSTR)EcToGbk(prog.asms[daj].name, cp),
+                            (int)prog.asms[daj].vars.size());
+                    for (size_t dvj = 0; dvj < prog.asms[daj].vars.size(); dvj++)
+                        fprintf(fS, "   var %08X %s\n", (unsigned)prog.asms[daj].vars[dvj].id,
+                                (LPCSTR)EcToGbk(prog.asms[daj].vars[dvj].name, cp));
+                }
+                fprintf(fS, "-- methods (%d) --\n", (int)prog.methods.size());
+                for (size_t dmj = 0; dmj < prog.methods.size(); dmj++)
+                {
+                    fprintf(fS, "method %08X %s params=%d locals=%d\n",
+                            (unsigned)prog.methods[dmj].id,
+                            (LPCSTR)EcToGbk(prog.methods[dmj].name, cp),
+                            (int)prog.methods[dmj].params.size(),
+                            (int)prog.methods[dmj].locals.size());
+                    for (size_t dpj = 0; dpj < prog.methods[dmj].params.size(); dpj++)
+                        fprintf(fS, "   param %08X %s\n",
+                                (unsigned)prog.methods[dmj].params[dpj].id,
+                                (LPCSTR)EcToGbk(prog.methods[dmj].params[dpj].name, cp));
+                    for (size_t dlj = 0; dlj < prog.methods[dmj].locals.size(); dlj++)
+                        fprintf(fS, "   local %08X %s\n",
+                                (unsigned)prog.methods[dmj].locals[dlj].id,
+                                (LPCSTR)EcToGbk(prog.methods[dmj].locals[dlj].name, cp));
+                }
+                fclose(fS);
+            }
+        }
+    }
+
     for (size_t ai = 0; ai < prog.asms.size(); ai++)
     {
         const EcAsm& a = prog.asms[ai];
@@ -1081,7 +1693,7 @@ BOOL EcLoadEProject(LPCTSTR pszPath, CString& strOut)
             line.Format(_T(".子程序 %s, %s, , %s, %s"),
                         (LPCTSTR)name, (LPCTSTR)ret,
                         (m.flags & 0x80) ? _T("公开") : _T(""), (LPCTSTR)note);
-            EcLine(out, line);
+            EcLine(out, EcTrimTailFields(line));
 
             for (size_t pi = 0; pi < m.params.size(); pi++)
                 EcLine(out, EcVarLine(_T(".参数"), m.params[pi], cp, TRUE, libIdx, prog));
@@ -1102,9 +1714,17 @@ BOOL EcLoadEProject(LPCTSTR pszPath, CString& strOut)
                     libIdx, strErr, &symTable);
                 DWORD tB = ::GetTickCount();
                 g_dwDecodeMs += (tB - tA);
+                // ⚠️ 不要按「剪贴板文本里的空行」往正文里插空行：那是文本形式，
+                //    原版**屏幕**上并没有这些空行（实测 01_top 2.41% → 5.43%，已回滚）。
+                //    判据：tools/cmp_shots.py 的逐像素数字。
+                // ⚠️ A/B 试验 A 已做并回滚：在独立注释行前补空行，像素**无变化**
+                //    （说明空行被排版压掉）；配合 ec_editor 建行才生效，但那会恶化到 5.81%。
                 for (size_t bi = 0; bi < body.size(); bi++)
                     EcLinePref(out, "    ", body[bi]);
-                if (!strErr.IsEmpty())
+                // ⚠️ 原版正文里**没有**这类提示行（判据：原版自己 Ctrl+A/Ctrl+C 的
+                //    剪贴板文本，见 tools/text_oracle.py 与 shots/cmp/orig_sel.txt）。
+                //    所以默认不写进正文，只在 ECLONE_SHOW_DECODE_DIAG 时输出。
+                if (!strErr.IsEmpty() && EcShowDecodeDiag())
                     EcLinePref(out, "    ' [解码提示] ", strErr);
                 g_dwAppendMs += (::GetTickCount() - tB);
                 g_nBodyLines += (unsigned)body.size();

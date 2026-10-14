@@ -184,4 +184,25 @@
 #define IDC_WF_PANE2            1102    // “搜寻2”系统输出夹
 #define IDC_WF_HINT             1047    // 一行提示/状态（模板初始为空）
 
+// ---------------------------------------------------------------- 代码编辑器「流程线」图元
+// 这 9 张图元是 e.exe 的 RT_BITMAP 原样导出（tools 无关，见 HANDOFF 流程线一节）。
+// **数值 = e.exe 里的原始资源 ID**，这样转录过来的原版绘制代码可以用同一个
+// LoadImage(hInst, MAKEINTRESOURCE(id), IMAGE_BITMAP, ...) 加载，不必改 ID。
+//   0x9D 9x9 十字接头      0x9E 9x9 横线段(蓝端帽)   0x9F 9x9 双旗(书签)
+//   0xA2 4x7 竖接头         0xA3 7x4 ▼(块尾)        0xE1 11x11 大对勾
+//   0xE4 7x4 ▲(块首)        0x23F 9x9 虚线右箭头     0x241 9x9 菱形(断点)
+#define IDB_ECFLOW_9D           157     // 0x9D
+#define IDB_ECFLOW_9E           158     // 0x9E
+#define IDB_ECFLOW_9F           159     // 0x9F
+#define IDB_ECFLOW_A2           162     // 0xA2
+#define IDB_ECFLOW_A3           163     // 0xA3  ▼
+#define IDB_ECFLOW_E1           225     // 0xE1
+#define IDB_ECFLOW_E4           228     // 0xE4  ▲
+#define IDB_ECFLOW_23F          575     // 0x23F
+#define IDB_ECFLOW_241          577     // 0x241
+// 0xE6 = 224x14 4bpp 图标条（16px × 14 个），原版拿它建 ImageList：
+//   CImageList::Create(MAKEINTRESOURCE(230), cx=16, cGrow=0, crMask=0xC0C0C0)
+// paint 里用它画左侧标志列的图标：ImageList_Draw(himl, 9/12/13, hdc, 2, y/2-7, 1)
+#define IDB_ECFLOW_E6           230     // 0xE6 图标条(ImageList)
+
 #endif // _ECLONE_RESOURCE_H_

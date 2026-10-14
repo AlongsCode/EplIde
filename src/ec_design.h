@@ -138,6 +138,8 @@ public:
     int  CurForm() const { return m_curForm; }
     LPCTSTR FormName(int i) const;           // i 越界返回 ""
     BOOL CreateNewForm(LPCTSTR pszName);     // 再建一个窗体（尺寸取 g_ecCfg 的"新建窗口宽/高"）
+    // ★ 用打开的真 .e 里的窗体表建真窗体 + 真组件（几何/属性数据都来自 .e，见 PLAN_EPARSE.md R3/R4）
+    BOOL BuildFromProject(int nFormIdx);
     BOOL SelectForm(int i);                  // 切到第 i 个窗体（藏旧的、显新的）
 
     LPCTSTR CursorAtCursor() const;          // 当前鼠标位置该用哪个光标（缩放手柄用）

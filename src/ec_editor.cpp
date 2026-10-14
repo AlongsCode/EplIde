@@ -8,6 +8,7 @@
 #include "ec_editor.h"
 #include "ec_lib.h"
 #include "ec_theme.h"
+#include "resource.h"
 #include <string.h>
 #include <stdarg.h>
 
@@ -118,10 +119,29 @@ static void EcTraceWrite(const CString& s)
 #define EC_C_SELBG     EC_CS(MARK)
 #define EC_C_PNAME     EC_CS(PARAM_NAME_FG)  // 参数归属线里的「参数名：」
 #define EC_C_NUM       EC_CS(NUMBER_FG)      // 数值
+
 // 选区：底色 = 「选中标记」槽，文字 = 白（原版实测 —— 在它的代码编辑器里拖选一段，
 // 选中的字就是 #000080 底 + 白字，选区高度 = 文字那 12px，见 shots\live_drag\after.png）
-#define EC_C_SELBG     EC_CS(MARK)
 #define EC_C_SELFG     RGB(255, 255, 255)
+
+// ---------------------------------------------------------------------------
+// e.exe 的绘制侧实证（2026 复测，见 HANDOFF §5.0.10 X41 / X42 / X36 / X48）：
+//
+//   * 绘制函数 = sub_4F5660（0xC2B，812 条指令），是**自绘对话框类**的成员；
+//     该类的 vtable 在 0x5FB580，槽里带 ?PreTranslateMessage@CDialog@@ /
+//     ?SetOccDialogInfo@CDialog@@ / ?OnOK@CDialog@@ ⇒ **基类是 CDialog，不是 CView**。
+//   * 同类的排版函数 = sub_4F4D50（0x5FB）：它调 GetTextExtentPoint32A(0x4F52B8)
+//     量字宽，并遍历一张 **每项 20 字节** 的「条目记录表」
+//     （+0x00 = CString*, +0x14 = WORD 标志位：bit0 空串占位 / bit4 跳过）。
+//   * sub_4F5660 引用的颜色全局 = dword_67326C / 673270 / 673274 / 673278 / 67327C /
+//     673284。**实测（rmem 读活着的 5.9，base 0x400000）这 6 个在运行期恒为 0，
+//     且全 e.exe 里对它们只有"读"、没有任何"写"** ⇒ 读到 0 的分支画的就是黑色。
+//     ⇒ **配色不在这些全局里**，唯一的来源是「工具->系统配置->程序显示->颜色配置」
+//     选中的 e\clr\*.clr（本工程由 ec_theme.cpp 的 g_ecTheme 提供，与上述结论一致）。
+//     **所以本文件不应再出现硬编码颜色**，一律走 EC_CS(...) 主题槽。
+//   * 流程虚线的 "3 亮 3 灭"（EcFlowLine，步长 6、LineTo(y+3)）与实测吻合：
+//     x=47 上 y=305..307 亮 / 308..310 灭 / 311..313 亮。
+// ---------------------------------------------------------------------------
 
 // 表格线样式：原版「程序显示」页的「表格线画为虚线」(id=129) 控制
 // 下面三个度量本来是编译期常量（EC_CELL_H/EC_ROW_PITCH/EC_CODE_H），
@@ -173,6 +193,78 @@ static void EcFlowLine(CDC& dc, int x0, int y0, int x1, int y1)
             dc.LineTo((x + 3 <= xe) ? x + 3 : xe + 1, y0);
         }
     }
+}
+
+// ============================================================================
+// 原版流程线图元（1:1 转录，不是手搓）
+//
+// 出处（伪 C 取自 e.exe）：
+//   sub_4CA030  0x4CA030  色键贴图：GetObject 取图元尺寸 -> 兼容 DC 选中图元 ->
+//                         （带 region 时先用 0xFF000000/dword_6731B0 铺底）->
+//                         BitBlt(dst, x, y, w, h, memdc, 0, 0, 0xB8074A) -> region 差掉该矩形
+//   sub_4B80E0  0x4B80E0  接头：十字矩形清底 + 贴图元 + 补一笔连接线；
+//                         方向在函数内选：向下 -> unk_680408(0xA3 ▼)
+//                                       向上 -> unk_680428(0xE4 ▲)
+//                                       横向 -> unk_680410(0xA2 右三角)
+//   sub_4BBC00  0x4BBC00  逐行组装流程线（990 行），其中直接用到的图元：
+//                         0x9D 十字接头 / 0x9E 横线段（蓝色端帽 = 当前态）、
+//                         0x241 断点菱形、0x23F 当前行箭头、0x9F 书签双旗
+//   加载方式取自 WM_CREATE(0x4C0160)：LoadBitmap(hInst, MAKEINTRESOURCE(id)) + CGdiObject::Attach
+// ============================================================================
+static CBitmap g_bmpFlow9D, g_bmpFlow9E, g_bmpFlow9F, g_bmpFlowA2, g_bmpFlowA3;
+static CBitmap g_bmpFlowE1, g_bmpFlowE4, g_bmpFlow23F, g_bmpFlow241, g_bmpFlowE6;
+
+static CBitmap* EcGlyphBmp(UINT id)
+{
+    switch (id)
+    {
+    case IDB_ECFLOW_9D:  return &g_bmpFlow9D;
+    case IDB_ECFLOW_9E:  return &g_bmpFlow9E;
+    case IDB_ECFLOW_9F:  return &g_bmpFlow9F;
+    case IDB_ECFLOW_A2:  return &g_bmpFlowA2;
+    case IDB_ECFLOW_A3:  return &g_bmpFlowA3;
+    case IDB_ECFLOW_E1:  return &g_bmpFlowE1;
+    case IDB_ECFLOW_E4:  return &g_bmpFlowE4;
+    case IDB_ECFLOW_23F: return &g_bmpFlow23F;
+    case IDB_ECFLOW_241: return &g_bmpFlow241;
+    case IDB_ECFLOW_E6:  return &g_bmpFlowE6;
+    }
+    return NULL;
+}
+
+// WM_CREATE(0x4C0160) 的加载方式：LoadBitmap + Attach（只加载一次）
+static void EcLoadFlowGlyphs()
+{
+    static const UINT ids[] = {
+        IDB_ECFLOW_9D, IDB_ECFLOW_9E, IDB_ECFLOW_9F, IDB_ECFLOW_A2, IDB_ECFLOW_A3,
+        IDB_ECFLOW_E1, IDB_ECFLOW_E4, IDB_ECFLOW_23F, IDB_ECFLOW_241, IDB_ECFLOW_E6,
+    };
+    for (int i = 0; i < (int)(sizeof(ids) / sizeof(ids[0])); i++)
+    {
+        CBitmap* p = EcGlyphBmp(ids[i]);
+        if (p && p->GetSafeHandle() == NULL)
+        {
+            HBITMAP h = ::LoadBitmap(AfxGetResourceHandle(), MAKEINTRESOURCE(ids[i]));
+            if (h) p->Attach(h);
+        }
+    }
+}
+
+// sub_4CA030 的转录：色键贴图（ROP 0xB8074A 与目标 DC 里选中的画刷配合使用）
+static void EcGlyphBlit(CDC& dc, UINT id, int x, int y, COLORREF crBrush)
+{
+    CBitmap* p = EcGlyphBmp(id);
+    if (!p || p->GetSafeHandle() == NULL) return;
+    BITMAP bm;
+    if (!::GetObject(p->GetSafeHandle(), sizeof(bm), &bm)) return;
+    CDC memdc;
+    if (!memdc.CreateCompatibleDC(&dc)) return;
+    CBitmap* pOldBmp = memdc.SelectObject(p);
+    CBrush br(crBrush);
+    CBrush* pOldBr = dc.SelectObject(&br);
+    dc.BitBlt(x, y, bm.bmWidth, bm.bmHeight, &memdc, 0, 0, 0xB8074A);
+    dc.SelectObject(pOldBr);
+    memdc.SelectObject(pOldBmp);
 }
 
 // 实心等腰三角形（原版：底 7px 宽、高 4px）
@@ -336,13 +428,26 @@ static CString EcFirstIdent(const CString& s)
 }
 
 static const TCHAR* g_szBlockStart[] = {
-    _T("如果"), _T("如果真"), _T("判断"), _T("判断循环首"), _T("循环判断首"),
+    // ★ R-K：块首是 `判断开始`，**不是** `判断`。`.判断 (…)` 是同一个块的第 2 条分支，
+    //   它不该再开一次块 —— 两个名字都放进来会让栈多压一层而 判断结束 只弹一次，
+    //   配对失衡（已实测：01_top 0.25% → 1.36%，回滚）。交换成只剩 `判断开始` 后：
+    //   判断开始 indent=1 + 入栈 → 它的体 indent=1（原版实测 x=68）；
+    //   `.判断`/`.默认` 当普通语句/分支关键字 → indent 沿用 1；判断结束 弹出 → 平衡。
+    _T("如果"), _T("如果真"), _T("判断开始"), _T("判断循环首"), _T("循环判断首"),
     _T("计次循环首"), _T("变量循环首"), NULL
 };
 static const TCHAR* g_szBlockEnd[] = {
     _T("如果结束"), _T("如果真结束"), _T("判断结束"), _T("判断循环尾"),
     _T("循环判断尾"), _T("计次循环尾"), _T("变量循环尾"), NULL
 };
+// ★ R-H：「流程分支段」的段首。实测原版在 flowcmd.e 上一共 8 个 ►►：
+//   如果 2（含 .否则 那一支）、如果真 1、判断 3（判断开始/判断/默认）、两个循环各 1。
+static const TCHAR* g_szSegHead[] = {
+    _T("如果"), _T("如果真"), _T("判断"), _T("判断开始"), _T("判断循环首"),
+    _T("循环判断首"), _T("计次循环首"), _T("变量循环首"), NULL
+};
+// 分支关键字（原版**不建行**）：它们各自开启一个新的流程段，所以后面那条语句要画 ►►
+static const TCHAR* g_szBranchKw[] = { _T("否则"), _T("默认"), NULL };
 // 原版**不画**的行：如果/判断家族的块尾 + 分支关键字（否则/默认）。
 // 实测（本轮重新拍的 1:1 基准）：
 //   · shots\live_flowcmd\view0.png（原版自带例程「流程控制类命令演示」，1:1）：
@@ -359,7 +464,9 @@ static const TCHAR* g_szHidden[] = {
 };
 static const TCHAR* g_szKeywords[] = {
     _T("如果"), _T("如果真"), _T("如果结束"), _T("如果真结束"), _T("否则"),
-    _T("判断"), _T("判断结束"), _T("判断循环首"), _T("判断循环尾"),
+    // ★ R-K：补 `判断开始` —— 漏了它，EClone 把这一行画成**黑**的普通文本
+    //   （实测 mine (0,0,0) 197px），原版是**蓝关键字**（(0,0,255) 107px）。
+    _T("判断"), _T("判断开始"), _T("判断结束"), _T("判断循环首"), _T("判断循环尾"),
     _T("循环判断首"), _T("循环判断尾"), _T("计次循环首"), _T("计次循环尾"),
     _T("变量循环首"), _T("变量循环尾"), _T("返回"), _T("跳出循环"), _T("到循环尾"),
     _T("结束"), _T("真"), _T("假"), _T("空"), _T("默认"), NULL
@@ -553,6 +660,8 @@ CECEditor::CECEditor()
       m_nAnchorLine(0), m_nAnchorCol(0), m_bDragging(FALSE), m_bOpenMark(FALSE),
       m_bEditing(FALSE), m_nEditRow(-1), m_nEditCol(-1),
       m_bParamShow(FALSE),
+      m_nCaretCell(-1), m_nCaretCellCol(0), m_nCaretRow(-1),
+      m_bCaretCreated(FALSE), m_bCaretShown(FALSE),
       m_nKind(ECK_ASM), m_nUndo(-1),
       m_nLineH(EC_CODE_H)
 {
@@ -576,6 +685,7 @@ int CECEditor::OnCreate(LPCREATESTRUCT lpCreateStruct)
     if (CWnd::OnCreate(lpCreateStruct) == -1)
         return -1;
     ApplyTheme();
+    EcLoadFlowGlyphs();          // 原版 WM_CREATE(0x4C0160) 里那批 LoadBitmap + Attach
     return 0;
 }
 
@@ -622,6 +732,7 @@ void CECEditor::SetKind(int k)
     Rebuild();
     m_nCaretLine = m_nCaretCol = 0;
     m_nCaretCell = -1;
+    m_nCaretRow = -1;
     m_nAnchorLine = 0; m_nAnchorCol = 0;
     if (m_rows.size() > 0)
     {
@@ -1439,6 +1550,7 @@ void CECEditor::SetText(LPCTSTR psz)
     DWORD t2 = ::GetTickCount();
     m_nCaretLine = m_nCaretCol = 0;
     m_nCaretCell = -1;
+    m_nCaretRow = -1;
     for (int i = 0; i < (int)m_rows.size(); i++)
         if (m_rows[i].kind == 1) { m_nCaretLine = m_rows[i].src; break; }
     // 整页都是表格（Dll命令页）时没有代码行 —— 原版把插入点放在第一行
@@ -1612,6 +1724,7 @@ void CECEditor::AddTableRow(int nTable, int nCols, int nFill, LPCTSTR const* psz
     //    于是「这一行有没有参数归属线」变成随机真 —— 实测同一进程里连着几行都读到
     //    4402570，流程槽上凭空多出一堆 -/+（原版只给带参的支持库命令画）。
     r.bParam = FALSE;
+    r.bArrow = FALSE;
     for (int i = 0; i < nCells; i++)
     {
         EcCell c;
@@ -1646,6 +1759,7 @@ void CECEditor::AddCodeRow(const CString& s, int nSrc)
     r.blkEnd = -2;
     r.blkLast = -1;
     r.bParam = FALSE;       // ⚠️ 见 AddTableRow 里的说明：不初始化就是栈垃圾
+    r.bArrow = FALSE;
     r.y = r.h = 0;
     m_rows.push_back(r);
 }
@@ -1657,6 +1771,8 @@ static const TCHAR* g_szLoopKw[] = {
     _T("计次循环首"), _T("变量循环首"), _T("判断循环首"), _T("循环判断首"), NULL
 };
 static BOOL EcIsLoopKw(const CString& s) { return EcInList(g_szLoopKw, s); }
+static BOOL EcIsSegHead(const CString& s) { return EcInList(g_szSegHead, EcFirstIdent(s)); }
+static BOOL EcIsBranchKw(const CString& s) { return EcInList(g_szBranchKw, EcFirstIdent(s)); }
 
 // 解析 ".子程序 名, 返回值, , 公开" 之类
 static void EcParseDecl(const CString& rest, std::vector<CString>& tok,
@@ -1721,6 +1837,8 @@ void CECEditor::Rebuild()
     BOOL bDll = FALSE;           // 当前块是 Dll命令（参数表 5 列，语义也不同）
     BOOL bNeedDown = FALSE;      // 子程序表格后第一条语句 -> 流程槽画 ↓
     BOOL bSkipBody = FALSE;      // 当前子程序被收起 -> 跳过它的数据行
+    BOOL bBodyStarted = FALSE;   // 正文里是否已经出现过代码行（R-G：第一条注释行前**不**补空行）
+    BOOL bArrowNext = FALSE;     // R-H：下一条语句是一个新的「流程分支段」的首行 -> 画 ►►
     std::vector<CString> tok;
     std::vector<CString> seps;      // 原样的分隔符（备注原样重拼用）
     std::vector<int>     blkStack;  // 块首关键字的显示行号栈（配对源码里的块尾）
@@ -1730,6 +1848,15 @@ void CECEditor::Rebuild()
         CString s = EcTrim(m_lines[i]);
         if (s.IsEmpty())
         {
+            // ⚠️ 已试并回滚：给「注释行上方的空行」建行（判据来自
+            //    shots/cmp/zoom_after_r2.png 里原版那条空行）→ 01_top 2.01% → 5.81%。
+            //    说明 EClone 的行数与原版还有**别处**的补偿性差异，单点补空行只会把
+            //    已经对齐的部分顶掉。下次要先做「整篇行带对齐表」再动这里（RECON_PLAN 2.9）。
+            // ⚠️ 实测否证（2026-10-10 夜）：本来以为「原版正文里的空行占一整行高度」，
+            //    于是这里给程序集页也建了一条空行 —— 结果 01_top 差异 **2.41% → 5.43%**。
+            //    结论：**原版屏幕上的正文没有这些空行**（剪贴板文本里的空行只是文本形式，
+            //    不是屏幕排版）。源码里对应的空行要继续丢掉。
+            //    判据：tools/cmp_shots.py 的 `01_top` 数字 + tools/line_cmp.py 的行带。
             // 常量/资源表页：原版把源里的空行也画成一行空表格（实测
             // shots\live_pg_常量表___\view_常量表....png 里每个常量组之间都有一行空的；
             // 全局变量表/自定义数据类型表里没有这种空行）
@@ -2185,10 +2312,28 @@ void CECEditor::Rebuild()
             if (bHide)
             {
                 // 分支关键字（否则 / 默认）：原版不画，只跳过
+                // ★ R-H：但它开启了一个新的流程段 —— 后面第一条语句要画 ►►
+                if (EcIsBranchKw(s)) bArrowNext = TRUE;
                 bNeedDown = FALSE;
                 continue;
             }
+            // ★ R-G（2026-10-10 夜，行带对齐表驱动）：原版**每条独立注释行上方**有一条
+            //   整行高的空行（像素实证 shots/_gap_orig.png：`画板1.滚动写行 (…≠2)` 与
+            //   `' 演示"如果真"命令` 之间是一条空行）。规则：正文里出现的第一条代码行不算，
+            //   之后每条独立注释语句行之前补一条空代码行。
+            //   判据：补完后行带 y 与原版逐条吻合（row10 注释 → 236、row13 → 308、
+            //   row19 → 434、row26 → 560 …），且 01_top 不上升。
+            if (s.GetLength() > 0 && s[0] == _T('\'') && bBodyStarted)
+            {
+                const EcRow& prev = m_rows[m_rows.size() - 1];
+                if (!(prev.kind == 1 && prev.code.IsEmpty()))
+                    AddCodeRow(_T(""), i);
+            }
             AddCodeRow(s, i);
+            bBodyStarted = TRUE;
+            // ★ R-H：段首自己不带 ►►，它后面那条语句才带（原版实测 8 个 ►► 的位置）
+            if (EcIsSegHead(s)) bArrowNext = TRUE;
+            else if (bArrowNext) { m_rows[m_rows.size() - 1].bArrow = TRUE; bArrowNext = FALSE; }
             m_rows[m_rows.size() - 1].indent = bStart ? (nContext + 1) : nContext;
             if (bNeedDown) { m_rows[m_rows.size() - 1].mark = ECM_DOWN; bNeedDown = FALSE; }
             if (bStart)
@@ -2503,7 +2648,11 @@ void CECEditor::DrawAll(CDC& dc)
             int xa = tx + dc.GetTextExtent(m_rows[k].code.Left(sa)).cx;
             int xb = tx + dc.GetTextExtent(m_rows[k].code.Left(sb)).cx;
             if (xb <= xa) xb = xa + 4;              // 空行/行尾也留一小段，看着像选中了
-            dc.FillSolidRect(xa, y + 3, xb - xa, EC_FONT_H, EC_C_SELBG);
+            // ★ R-M：选区底色的纵向位置 = **行顶 +1**，和正文同一个基准
+            //   （正文在 DrawCodeRow 里画在 `y + EC_CODE_TEXT_DY` = y+1）。
+            //   原版实测（07_ctrl_a 逐列扫）：带顶 = row.y+1、高 EC_FONT_H(12)，
+            //   EClone 原来 +3 → 整条低 2px，所以每行都差 900~1200px。
+            dc.FillSolidRect(xa, y + 1, xb - xa, EC_FONT_H, EC_C_SELBG);
         }
     }
 
@@ -2540,7 +2689,7 @@ void CECEditor::DrawAll(CDC& dc)
             if (m_rows[i0].kind != 1 || m_rows[i0].blkEnd == -2) continue;
             int nLv = m_rows[i0].indent;
             int x   = EC_TEXT_X_OF(nLv - 1) + 1;
-            int yTop = m_rows[i0].y + 9 - m_nScroll;
+            int yTop = m_rows[i0].y + 7 - m_nScroll;
             CString kw = EcFirstIdent(m_rows[i0].code);
             BOOL bLoop = EcIsLoopKw(kw);
 
@@ -2549,52 +2698,103 @@ void CECEditor::DrawAll(CDC& dc)
             if (m_rows[i0].blkEnd >= 0)
             {
                 int i1 = m_rows[i0].blkEnd;
-                int yBot = m_rows[i1].y + 9 - m_nScroll;
+                int yBot = m_rows[i1].y + 7 - m_nScroll;
                 EcFlowLine(dc, x, yTop, x, yBot);
                 EcFlowLine(dc, x + (bLoop ? 0 : 2), yTop, x + 15, yTop);
                 EcFlowLine(dc, x, yBot, x + 15, yBot);
                 dc.SelectObject(pOld);
                 if (bLoop)                                  // 块首行的 ►（块尾行没有）
-                    for (int r = 0; r < 7; r++)
-                        dc.FillSolidRect(x + 12, yTop - 3 + r, pw[r], 1, EC_C_FLOW);
+                    // 原版图元 0xA2(4x7)。竖直中心 = 块首行中线 ⇒ blit y = 中线 − 3
+                    // （逐像素对：原版循环块的 ► 在 y=474..480，EClone 原来 yTop−4 高了 1px）
+                    EcGlyphBlit(dc, IDB_ECFLOW_A2, x + 12, yTop - 3, EC_C_FLOW);
             }
             else
             {
                 int iLast = m_rows[i0].blkLast;
                 if (iLast < i0) iLast = i0;
                 int yBot = m_rows[iLast].y + EC_CODE_H - 1 - m_nScroll;
+                // ★ R-J（第 4 版，逐像素对出来的）：先找各「分支段」首行（bArrow）的中线，
+                //   末支中线决定主竖线终点 / 脊线长度 / ▶ / ▼ 的位置。
+                int nSeg = 0, ySegFirst = 0, ySegLast = 0;
+                for (int j = i0 + 1; j <= iLast && j < n; j++)
+                {
+                    if (m_rows[j].kind != 1 || !m_rows[j].bArrow) continue;
+                    int ycv = m_rows[j].y + 7 - m_nScroll;
+                    if (nSeg == 0) ySegFirst = ycv;
+                    ySegLast = ycv;
+                    nSeg++;
+                }
+                // 主竖线终点：多分支止于**末支中线**（原版 x=47 止于 y=207，此后不再画）；
+                //             单分支止于**末支中线 +6**（原版如果真 x=47 止于 y=285）
+                if (nSeg >= 1) yBot = (nSeg >= 2) ? ySegLast : (ySegLast + 6);
                 EcFlowLine(dc, x, yTop, x, yBot);
                 EcFlowLine(dc, x + 2, yTop, x + 15, yTop);
+                // ★ R-J（第 2 版）：**多分支**块的每一支再画一条横向接头 + 一条分支脊线。
+                //   几何从原版 `01_top` x=40..72 的像素图 1:1 读出：块竖线 = x；
+                //   分支脊线 = x+6（原版 53 = 47+6，只跨各支的首行中线）；每支接头 =
+                //   从 x+6 到 x+15 的横虚线（画在该行中线 row.y+9）；最后一支末端有 ▶。
+                //   实测：`.如果`/`.否则` 两条、`判断开始`/`.判断`/`.默认` 三条；
+                //   **单支块（如果真 / 循环）没有**（原版 iftrue 体 x=68 处无脊线）。
+                //   ⚠️ 第 1 版没加"≥2 支"这个条件，给如果真多画了一条 → 01_top +21，
+                //      已回滚；这次按实测加条件。
+                // ★ R-J（第 3 版，逐像素对出来的）：多分支块的分支接头。
+                //   原版 `01_top` x=40..72 的像素图（O=原版）：
+                //     · 第 1 支的横接头从**脊线 x+6** 出发；第 2 支起从**主竖线 x** 出发
+                //       （原版 y=189 从 x=53 起、y=207 从 x=47 起）
+                //     · 脊线 x+6 从第 1 支中线延到**末支中线 +2**（原版 189..209）
+                //     · ▶ 图元 A2(4x7) 贴在末支横接头末端，竖直中心 = 末支中线
+                //       → blit y = 末支中线 - 3（原版 204..210，中线 207）
+                //     · ▼ 图元 A3 在多分支时**居中在脊线 x+6**（原版 50..56），
+                //       单分支时居中在主竖线 x（原版 44..50）；顶 = 末支中线 + 6
+                // （nSeg / ySegFirst / ySegLast 已在上面算好）
+                if (nSeg >= 2)
+                {
+                    int k = 0;
+                    for (int j = i0 + 1; j <= iLast && j < n; j++)
+                    {
+                        if (m_rows[j].kind != 1 || !m_rows[j].bArrow) continue;
+                        k++;
+                        int yc = m_rows[j].y + 7 - m_nScroll;
+                        // 第 1 支从 x+8 出（原版 y=189 的虚线相位 55,56,57 / 61,62 =
+                        // 线从 55 起按「3 亮 3 灭」铺）；第 2 支起从主竖线 x 出
+                        EcFlowLine(dc, (k == 1) ? x + 8 : x, yc, x + 15, yc);
+                    }
+                    // 脊线 x+6：第 1 支中线 → 末支中线 +6（原版 189..213）
+                    EcFlowLine(dc, x + 6, ySegFirst, x + 6, ySegLast + 6);
+                }
                 dc.SelectObject(pOld);
-                for (int r = 0; r < 5; r++)                 // ▼ 收尾
-                    dc.FillSolidRect(x - dw[r] / 2, yBot - 2 + r, dw[r], 1, EC_C_FLOW);
+                // ▼ 收尾：原版图元 0xA3(7x4)，等价于 sub_4B80E0 的向下分支贴图
+                // ▶ 图元 A2：贴在末支横接头末端，竖直中心 = 末支中线（blit y = 中线 − 3）
+                // ▼ 图元 A3：多分支**居中在脊线**（blit x = x+3，原版 50..56）；单分支
+                //            居中在主竖线（blit x = x−3，原版 44..50）；blit y = 末支中线 + 7
+                if (nSeg >= 1 && !bLoop)
+                {
+                    if (nSeg >= 2)
+                        EcGlyphBlit(dc, IDB_ECFLOW_A2, x + 12, ySegLast - 3, EC_C_FLOW);
+                    EcGlyphBlit(dc, IDB_ECFLOW_A3, (nSeg >= 2) ? x + 3 : x - 3,
+                                ySegLast + 7, EC_C_FLOW);
+                }
+                else
+                    EcGlyphBlit(dc, IDB_ECFLOW_A3, x - 3, yBot - 3, EC_C_FLOW);
             }
 
-            // ►►：块体第一条「直接语句」。⚠️ 新的缩进语义下，**块体的直接语句和块首行同级**
-            // （见 Rebuild 里的缩进说明），嵌套块的块首才会深一级 —— 所以要找的是
-            // 「块首行之后第一条 indent == 块首 indent、且自身不是块首关键字」的语句。
-            // ⚠️ 只有**跨度 ≥ 3 个显示行**的块才画 —— 实测（本轮拍的原版自带例程）：
-            //   · `如果真 (…)` 体里只有 1 条语句 → 没 ►►
-            //     （shots\live_learn2\view0.png 的 4 个如果/如果真、
-            //      shots\live_flowcmd\view0.png 里嵌在循环里的那个如果真）
-            //   · `如果真 (…)` 体里有 2 条语句 → 第一条上有一个 ►►
-            //     （shots\live_fold_jy\view_before.png 的 `如果真（是否为调试版（））`，y=322..326）
-            //   · 循环块 `首+体+尾` 天然 3 行 → 总是有
-            int iEnd = (m_rows[i0].blkEnd >= 0) ? m_rows[i0].blkEnd : m_rows[i0].blkLast;
-            if (iEnd - i0 < 2) continue;
-            int iA = -1;
-            for (int j = i0 + 1; j < iEnd && j < n && m_rows[j].kind == 1; j++)
-            {
-                if (m_rows[j].indent < nLv) break;
-                if (m_rows[j].indent == nLv &&
-                    !EcInList(g_szBlockStart, EcFirstIdent(m_rows[j].code)))
-                { iA = j; break; }
-            }
-            if (iA < 0) continue;
-            int yA = m_rows[iA].y + 9 - m_nScroll;
+        }
+        // ►► = **每个「流程分支段」的首行**一个（R-H，2026-10-10）。
+        //   旧写法是「每个块只画一个、且要求块跨 ≥3 行」，实测否证：
+        //   原版在 flowcmd.e 的屏上有 8 个 ►► —— `.如果`/`.否则` 各 1（两段）、
+        //   `.如果真` 体 1、`.判断开始`/`.判断`/`.默认` 各 1（三段）、两个循环各 1；
+        //   x 恒为 33..39（= EC_TEXT_X_OF(0)+1-14 起，与缩进无关），
+        //   而旧写法在「如果真 体只有 1 行」时一个都不画。
+        //   判据：shots/cmp/01_top_{orig,mine}.png 的 gutter 蓝像素行集
+        //         （orig 188/206/278/350/386/404/494/620 vs 旧 mine 189/387/495/621）。
+        for (int i2 = 0; i2 < n; i2++)
+        {
+            if (m_rows[i2].kind != 1 || !m_rows[i2].bArrow) continue;
+            int yA = m_rows[i2].y + 9 - m_nScroll;
             for (int t = 0; t < 2; t++)
                 for (int r = 0; r < 5; r++)
-                    dc.FillSolidRect(x - 14 + t * 4, yA - 2 + r, aw[r], 1, EC_C_PUNCT);
+                    dc.FillSolidRect((EC_TEXT_X_OF(0) + 1) - 14 + t * 4,
+                                     yA - 2 + r, aw[r], 1, EC_C_PUNCT);
         }
     }
 
@@ -3800,17 +4000,25 @@ void CECEditor::CaretFromPoint(CPoint pt)
                     CFont* pOld = dc.SelectObject(&m_fontTable);
                     const CString& s = row.cells[ci].s;
                     int rel = pt.x - (x + EC_CELL_PAD);
+                    // ★ R-C：按**字符**边界取最近点（不是字节）。sweep 实测原版
+                    //   data 行 click 62 → 56、72 → 68（= 字符边界 50/56/68/80/92…），
+                    //   EClone 以前按字节推进（Left(i) 切到半截 GBK）得到 6px 等距的
+                    //   62/74，错位。判据：tools/caret_sweep.py。
                     int best = 0, bestd = 1 << 30;
-                    for (int i = 0; i <= s.GetLength(); i++)
+                    for (int i = 0; i <= s.GetLength(); )
                     {
                         int tw = dc.GetTextExtent(s.Left(i)).cx - rel;
                         if (tw < 0) tw = -tw;
                         if (tw < bestd) { bestd = tw; best = i; }
+                        if (i >= s.GetLength()) break;
+                        unsigned char c0 = (unsigned char)s[i];
+                        i += ((c0 >= 0x81 && c0 <= 0xFE) && i + 1 < s.GetLength()) ? 2 : 1;
                     }
                     dc.SelectObject(pOld);
                     m_nCaretLine = row.src;
                     m_nCaretCol  = -1;          // -1 = "落在表格格里"，见 ec_editor.h
                     m_nCaretCell = (int)ci;
+                    m_nCaretRow  = r;
                     // 格内偏移换算成该源码行里的字节位置：格文字在源码行里往后找
                     m_nCaretCellCol = best;
                     m_nAnchorLine = m_nCaretLine;
@@ -3827,6 +4035,7 @@ void CECEditor::CaretFromPoint(CPoint pt)
             m_nCaretLine = row.src;
             m_nCaretCol  = -1;
             m_nCaretCell = 0;
+            m_nCaretRow  = r;
             m_nCaretCellCol = 0;
             m_nAnchorLine = m_nCaretLine;
             m_nAnchorCol  = m_nCaretCol;
@@ -3835,6 +4044,7 @@ void CECEditor::CaretFromPoint(CPoint pt)
     }
 
     m_nCaretCell = -1;
+    m_nCaretRow  = r;
     CClientDC dc(this);
     CFont* pOld = dc.SelectObject(&m_font);
     // ⚠️ 正文左边缘是 TextXOfIndent(缩进级) = 46 + 22n；以前这里写的是 EC_FLOW_X(缩进级)
@@ -3860,6 +4070,11 @@ void CECEditor::CaretFromPoint(CPoint pt)
 int CECEditor::RowOfCaret() const
 {
     int i;
+    // ★ R-C：先认"点中的那一行"（原版 this[31] 就是行号）。表头行和数据行 src 相同，
+    //   只按 src 反查会把点数据格的光标算到表头行上（实测 y 差 21px）。
+    if (m_nCaretRow >= 0 && m_nCaretRow < (int)m_rows.size() &&
+        m_rows[m_nCaretRow].src == m_nCaretLine)
+        return m_nCaretRow;
     for (i = 0; i < (int)m_rows.size(); i++)
         if (m_rows[i].kind == 1 && m_rows[i].src == m_nCaretLine) return i;
     for (i = 0; i < (int)m_rows.size(); i++)
@@ -3902,7 +4117,10 @@ CRect CECEditor::CaretRect() const
         int w = dc.GetTextExtent(m_rows[i].code.Left(m_nCaretCol)).cx;
         dc.SelectObject(pOld);
         int x = TextXOfIndent(m_rows[i].indent) + w;
-        int y = m_rows[i].y - m_nScroll + 3;
+        // ★ R-C：原版代码行光标（sub_4B57E0 的非 13 分支）y=(row.y+row.h-lineH)/2，
+        //   SetCaretPos 再 −2 ⇒ 光标顶 = row.y + (18+? )…实测原版顶 = row.y − 1，
+        //   EClone 原来 +3 得 row.y + 1（低 2px）。改成 +1。
+        int y = m_rows[i].y - m_nScroll + 1;
         r.SetRect(x, y, x + 1, y + EC_FONT_H);
     }
     else
@@ -3925,10 +4143,17 @@ CRect CECEditor::CaretRect() const
             CClientDC dc((CECEditor*)this);
             CFont* pOld = dc.SelectObject((CFont*)&m_fontTable);
             const CString& s = row.cells[m_nCaretCell].s;
-            int off = m_nCaretCellCol;
-            if (off < 0) off = 0;
-            if (off > s.GetLength()) off = s.GetLength();
-            int w = dc.GetTextExtent(s.Left(off)).cx;
+            // ★ R-C：标题行（row.fill >= 0 = 列名那一行）的光标**钉在格文字起点**上，
+            //   不随点击位置走 —— sweep 实测原版 head(y65) 在 click 46..92 全给 x=50。
+            //   值行才做"最近的字符边界"定位。
+            int w = 0;
+            if (row.fill < 0)
+            {
+                int off = m_nCaretCellCol;
+                if (off < 0) off = 0;
+                if (off > s.GetLength()) off = s.GetLength();
+                w = dc.GetTextExtent(s.Left(off)).cx;
+            }
             dc.SelectObject(pOld);
             x = cx + EC_CELL_PAD + w;
         }
@@ -3939,25 +4164,28 @@ CRect CECEditor::CaretRect() const
 
 void CECEditor::UpdateCaret()
 {
-    if (GetFocus() != this) { ::DestroyCaret(); return; }
+    if (GetFocus() != this)
+    {
+        if (m_bCaretShown)   { ::HideCaret(GetSafeHwnd()); m_bCaretShown = FALSE; }
+        if (m_bCaretCreated) { ::DestroyCaret();          m_bCaretCreated = FALSE; }
+        return;
+    }
     CRect r = CaretRect();
 
-    // ★ 照原版 e.exe 改（第 27 轮）。原版 WM_SETFOCUS 的处理器 sub_4B4EA0（0x4B4EA0）：
-    //     CreateCaret(*(HWND *)(this + 28), nullptr, 2, dword_673904 + 4);
-    //   定位在 sub_4B55C0（0x4B55C0）：
-    //     SetCaretPos(x, y - 2);
-    //   以及 ImmSetCompositionWindow(...) —— 输入法候选框跟着光标走。
-    // 三处都和我们原来不一样：
-    //   · 宽：原版 2，我们原来 1
-    //   · 高：原版 = 行高 + 4，我们原来 = 字号(12)
-    //   · y ：原版上偏 2px，我们原来没有偏移
-    // ⚠️ 原版那个 dword_673904 是运行期配色/度量全局（文件里初值是 FFFFFFFF），
-    //    所以这里**不硬编码数字**，直接按同一个式子写成 EcCodeH() + 4。
-    // ⚠️ 光标必须落在窗口的裁剪区内，否则 Windows 会把它藏起来 —— y 用 r.top - 2
-    //    （CaretRect 给的 r.top 已经是"文字顶再往下 3px"，减 2 之后仍在行内）。
-    ::CreateCaret(GetSafeHwnd(), NULL, 2, EC_CODE_H + 4);
+    // ★ R-D：照原版 sub_4B4EA0 —— CreateCaret 只在"获得焦点"时做一次（宽 2、高 16）。
+    //   R-C 已实证原版光标高度恒为 16 = EC_FONT_H(12) + 4，表格格/代码行都一样。
+    if (!m_bCaretCreated)
+    {
+        ::CreateCaret(GetSafeHwnd(), NULL, 2, EC_FONT_H + 4);
+        m_bCaretCreated = TRUE;
+        m_bCaretShown = FALSE;
+    }
+    // ★ R-D：照原版 sub_4B55C0 的顺序 —— 先 sub_4B4F70(HideCaret) → SetCaretPos → sub_4B4F40(ShowCaret)。
+    //   以前每次 UpdateCaret 都 CreateCaret，重画路径上旧位置的残影会留一帧（看着就是"飘"）。
+    if (m_bCaretShown) { ::HideCaret(GetSafeHwnd()); m_bCaretShown = FALSE; }
     ::SetCaretPos(r.left, r.top - 2);
     ::ShowCaret(GetSafeHwnd());
+    m_bCaretShown = TRUE;
 
     // 输入法候选框跟随光标（原版 sub_4B55C0 里就是这一段）
     HIMC hIMC = ::ImmGetContext(GetSafeHwnd());
@@ -3981,7 +4209,8 @@ void CECEditor::OnSetFocus(CWnd* pOldWnd)
 void CECEditor::OnKillFocus(CWnd* pNewWnd)
 {
     CWnd::OnKillFocus(pNewWnd);
-    ::DestroyCaret();
+    if (m_bCaretShown)   { ::HideCaret(GetSafeHwnd()); m_bCaretShown = FALSE; }
+    if (m_bCaretCreated) { ::DestroyCaret();          m_bCaretCreated = FALSE; }
     Invalidate(FALSE);
 }
 
@@ -4424,7 +4653,24 @@ void CECEditor::OnKeyDown(UINT nChar, UINT nRepCnt, UINT nFlags)
             DeleteRange(l0, c0, l1, c1);
         }
         else if (m_nCaretCol > 0)
-            DeleteRange(m_nCaretLine, m_nCaretCol - 1, m_nCaretLine, m_nCaretCol);
+        {
+            // ★ R-L：插入点若正好落在**行首字面缩进之后**（= InsertNewline 回车后
+            //   `m_nCaretCol = pad.GetLength()` 的位置），退格**不是**删一个缩进空格，
+            //   而是**接上一行** —— 原版把缩进当排版、不当可删字符。
+            //   判据：`05_backspace` 的行带。原版退格后回到初始布局
+            //   （237,257,273,309…），EClone 改前和 `04_enter` 一字不差（220,255,275…）,
+            //   即**退格完全没生效**；`line_cmp` 因此报 dy=18（整页差一行）。
+            int k = 0;
+            while (k < m_nCaretCol && (cur[k] == _T(' ') || cur[k] == _T('\t'))) k++;
+            if (k == m_nCaretCol && k > 0 && m_nCaretLine > 0)
+            {
+                // 连同这段缩进一起吃掉（原版接行后不留缩进）
+                DeleteRange(m_nCaretLine - 1, m_lines[m_nCaretLine - 1].GetLength(),
+                            m_nCaretLine, k);
+            }
+            else
+                DeleteRange(m_nCaretLine, m_nCaretCol - 1, m_nCaretLine, m_nCaretCol);
+        }
         else if (m_nCaretLine > 0)
         {
             int nPrev = m_lines[m_nCaretLine - 1].GetLength();

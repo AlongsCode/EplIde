@@ -1,0 +1,70 @@
+275 static BOOL FindLibDir(CString& out);   // 定义在下面「面板内容」一节
+276 
+277 // 面板窗口 ID 与原版一致：工作夹 129 / 状态夹 130 / 窗口组件箱 110
+278 static const TCHAR* g_szWorkTabs[]   = { _T("支持库"), _T("程序"), _T("属性") };
+279 static const TCHAR* g_szStatusTabs[] = { _T("提示"), _T("输出"), _T("调用表"), _T("监视板"),
+280                                          _T("变量表"), _T("搜寻1"), _T("搜寻2"), _T("剪辑历史") };
+281 
+282 // 标签页图标：取自 e.exe 的 RT_BITMAP（工作夹 146 / 状态夹 148，各 7 个 16x16 图标）
+283 // 映射是按原版截图逐个对出来的：状态夹 = 提示/输出/调用表/监视板/变量表/搜寻1/搜寻2/剪辑历史
+284 static const int g_nWorkTabIcons[]   = { 0, 1, 2 };
+285 static const int g_nStatusTabIcons[] = { 0, 1, 5, 4, 3, 4, 4, 6 };
+286 
+287 // ------------------------------------------------------------------ 面板内层对话框
+288 // 原版面板层级：Afx:400000:8...(sizecbar 窗口) -> #32770 -> SysTabControl32 -> 内容
+289 // 这里照做：模板用 panes.rc，运行时把 #32770 撑到 pane 的客户区（模板的 DLU 尺寸不作数）
+290 class CPaneHost : public CWnd
+291 {
+292     DECLARE_DYNAMIC(CPaneHost)
+293 public:
+294     BOOL CreateFromTemplate(UINT nIDTemplate, CWnd* pParent);
+295 
+296 protected:
+297     virtual LRESULT WindowProc(UINT message, WPARAM wParam, LPARAM lParam);
+298     DECLARE_MESSAGE_MAP()
+299 };
+300 
+301 IMPLEMENT_DYNAMIC(CPaneHost, CWnd)
+302 
+303 BEGIN_MESSAGE_MAP(CPaneHost, CWnd)
+304 END_MESSAGE_MAP()
+305 
+306 BOOL CPaneHost::CreateFromTemplate(UINT nIDTemplate, CWnd* pParent)
+307 {
+308     HINSTANCE hInst = AfxFindResourceHandle(MAKEINTRESOURCE(nIDTemplate), RT_DIALOG);
+309     HRSRC hRes = ::FindResource(hInst, MAKEINTRESOURCE(nIDTemplate), RT_DIALOG);
+310     if (hRes == NULL)
+311         return FALSE;
+312     HGLOBAL hMem = ::LoadResource(hInst, hRes);
+313     if (hMem == NULL)
+314         return FALSE;
+315     LPCDLGTEMPLATE pTpl = (LPCDLGTEMPLATE)::LockResource(hMem);
+316     if (pTpl == NULL)
+317         return FALSE;
+318 
+319     HWND hWnd = ::CreateDialogIndirect(hInst, pTpl, pParent->GetSafeHwnd(), NULL);
+320     if (hWnd == NULL)
+321         return FALSE;
+322     if (!SubclassWindow(hWnd))
+323     {
+324         ::DestroyWindow(hWnd);
+325         return FALSE;
+326     }
+327     return TRUE;
+328 }
+329 
+330 // 通知(WM_NOTIFY/WM_COMMAND)是发给"控件的父窗口"的；控件挂在 #32770 下，
+331 // 所以要转给 pane，pane 的 ON_NOTIFY(TCN_SELCHANGE) 才收得到。
+332 // ⚠️ **WM_DRAWITEM 也一样**：owner-draw 的按钮把画自己的请求发给**直接父窗口**（#32770），
+333 //    不转给 pane 的话 `ON_WM_DRAWITEM` 永远不会被调到 —— 现象是"按钮在窗口树里可见、
+334 //    尺寸也对，就是一片灰什么都不画"（本轮踩过）。
+335 LRESULT CPaneHost::WindowProc(UINT message, WPARAM wParam, LPARAM lParam)
+336 {
+337     if (message == WM_NOTIFY || message == WM_COMMAND ||
+338         message == WM_DRAWITEM || message == WM_MEASUREITEM || message == WM_COMPAREITEM)
+339     {
+340         CWnd* pPane = GetParent();
+341         if (pPane != NULL && pPane->GetSafeHwnd() != NULL)
+342             return pPane->SendMessage(message, wParam, lParam);
+343     }
+344     return CWnd::WindowProc(message, wParam, lParam);

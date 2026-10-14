@@ -420,6 +420,9 @@ static void ReadPicks(LPCSTR p, std::vector<CString>& out, short type)
 }
 
 // ================================================================== 载入
+// 前向声明：去重要用它（定义在下面，见 EcLibFindByBaseName）
+int EcLibFindByBaseName(LPCTSTR pszBase);
+
 static int LoadOneLib(LPCTSTR pszPath)
 {
     typedef RAW_LIB* (WINAPI *PFN_GETNEWINF)(void);
@@ -427,6 +430,27 @@ static int LoadOneLib(LPCTSTR pszPath)
     HINSTANCE h = ::LoadLibrary(pszPath);
     if (h == NULL)
         return -1;
+
+    // ★ 去重：同一个库只能进 g_libs 一次。
+    //   根因（HANDOFF §X50）：EcLoadLibs 会被调 3 次（InitInstance / PopulatePanes /
+    //   支持库配置换库），而 InitInstance 已载 krnln、PopulatePanes 又载一次，
+    //   于是 g_libs 里出现两份 krnln —— EcBuildTree() 就把整棵库树建了两遍
+    //   （实测 1560 -> 3120，dump 里 系统核心支持库 出现在 depth-0 的 [0] 和 [1560]）。
+    //   这里按 basename（去路径/去扩展名/小写）查重，命中就直接返回已有下标。
+    {
+        CString base = pszPath;
+        int p = base.ReverseFind(_T('\\'));
+        if (p >= 0) base = base.Mid(p + 1);
+        int d = base.ReverseFind(_T('.'));
+        if (d >= 0) base = base.Left(d);
+        int ex = EcLibFindByBaseName(base);
+        if (ex >= 0)
+        {
+            ::FreeLibrary(h);          // 本模块的引用不需要
+            return ex;                 // 已载入，复用原下标
+        }
+    }
+
     PFN_GETNEWINF f = (PFN_GETNEWINF)::GetProcAddress(h, "GetNewInf");
     if (f == NULL)
         f = (PFN_GETNEWINF)::GetProcAddress(h, "GetLibInf");     // 3.0 以前的旧名

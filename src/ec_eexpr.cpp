@@ -89,6 +89,51 @@ CString EcLoopName(unsigned int mid)
     }
 }
 
+// 运算符**排版**（不是库名）。库元数据里这些命令叫「相加/等于/小于…」
+// （krnln.fne 实测：19=相加 38=等于 40=小于 41=大于，见 tools/parse_fne.py），
+// 原版显示却是中缀的全角符号 —— 符号来自 e.exe 内部那张运算符串池：
+//   文件偏移 0x26CB80 起的 GBK 串表含 ＋ － × ÷ ％ ＼ ＝ ≠ ＜ ＞ ≤ ≥ 且 或；
+// 而「中缀/前缀」的形态判据是原版自己的剪贴板文本（tools/text_oracle.py）：
+//   `1 ＋ 1 ＝ 2` / `变量1 ＝ 变量1 ＋ 1` / `变量1 ＜ 3`。
+// 返回值：2 = 中缀二元，1 = 前缀一元（负号），0 = 不是运算符。
+int EcOpGlyph(unsigned int mid, CString& glyph)
+{
+    switch (mid)
+    {
+    case 15: glyph = _T("×");  return 2;      // 相乘
+    case 16: glyph = _T("÷");  return 2;      // 相除
+    case 17: glyph = _T("＼"); return 2;      // 整除
+    case 18: glyph = _T("％"); return 2;      // 求余数
+    case 19: glyph = _T("＋"); return 2;      // 相加
+    case 20: glyph = _T("－"); return 2;      // 相减
+    case 38: glyph = _T("＝"); return 2;      // 等于
+    case 39: glyph = _T("≠");  return 2;      // 不等于
+    case 40: glyph = _T("＜"); return 2;      // 小于
+    case 41: glyph = _T("＞"); return 2;      // 大于
+    case 42: glyph = _T("≤");  return 2;      // 小于或等于
+    case 43: glyph = _T("≥");  return 2;      // 大于或等于
+    case 45: glyph = _T("且"); return 2;      // 并且
+    case 46: glyph = _T("或"); return 2;      // 或者
+    case 52: glyph = _T("＝"); return 2;      // 赋值
+    case 21: glyph = _T("－"); return 1;      // 负
+    default: glyph.Empty(); return 0;
+    }
+}
+
+// 把 `判断 (…)` 改写成 `判断开始 (…)`：只换开头那个名字，参数原样。
+// 判据：原版文本里同一块的首个分支是 `.判断开始 (1 ＋ 1 ＝ 2)`，
+//       后续分支才是 `.判断 (1 ＋ 1 ＝ 3)`。
+CString EcRenameCall(const CString& call, LPCTSTR pszNewName)
+{
+    int p = call.Find(_T(" ("));
+    if (p < 0)
+    {
+        if (call.Right(2) == _T("()")) return CString(pszNewName) + _T("()");
+        return call;
+    }
+    return CString(pszNewName) + call.Mid(p);
+}
+
 // ---------------------------------------------------------------- 渲染器
 struct ERender
 {
@@ -219,7 +264,7 @@ struct ERender
     CString VarExprBody(int d);
     CString FuncCall(int d, bool bStatement, CString* pComment);
     CString EndHeader(int d, LPCTSTR pszFallback);
-    CString ArgsOf(int d);
+    CString ArgsOf(int d, std::vector<CString>* pArgs = NULL);
 
     void Statement(int d, std::vector<CString>& out, bool* pIsEnd, unsigned char* pEndTok);
     void IfStmt(int d, unsigned char t, std::vector<CString>& out);
@@ -246,7 +291,7 @@ struct ERender
 // 关键：**不是逐字节找 0x01**，而是按参数跳（每步 off += TokenLen），
 //       所以 token 载荷里的 0x01（如 id 0x25010049 的字节）不会被误当终结符。
 // 这样「渲染写错」不会再污染「推进」——+185 那类错位从结构上就不会发生。
-CString ERender::ArgsOf(int d)
+CString ERender::ArgsOf(int d, std::vector<CString>* pArgs)
 {
     CString joined;
     std::vector<CString> args;
@@ -305,6 +350,13 @@ CString ERender::ArgsOf(int d)
     // ---- 3) 强制对齐到权威终点 ----
     s.i = end;
     if (s.i > s.n) s.i = s.n;
+
+    // `返回 ()`：唯一的实参是「空」时原版**不显示**它。
+    // 判据：原版文本是 `返回 ()`（EClone 曾输出 `返回 (空)`），
+    //       而多实参里的「空」原版是要显示的（如 `… (a, 空)`）。
+    if (args.size() == 1 && args[0] == _T("空")) args.clear();
+    if (pArgs != NULL) *pArgs = args;
+
     for (size_t k = 0; k < args.size(); k++)
     {
         if (args[k].IsEmpty()) continue;
@@ -348,7 +400,9 @@ CString ERender::ExprInner(unsigned char tok, int d)
     case 0x17: return Num(s.dbl());
     case 0x18: return CString(s.i16() != 0 ? _T("真") : _T("假"));
     case 0x19: { CString t = _T("日期("); t += Num(s.dbl()); t += _T(")"); return t; }
-    case 0x1A: { CString t = _T("\""); t += Text(s.mfc()); t += _T("\""); return t; }
+    // 字符串字面量用**全角引号**，与原版一致
+    // （判据：原版文本 `画板1.滚动写行 (“如果命令演示: 1+1=2”)`）。
+    case 0x1A: { CString t = _T("“"); t += Text(s.mfc()); t += _T("”"); return t; }
     // 0x1B = 常量引用：操作数是常量 id。
     // ⚠️ 原版这里输出的是**常量名**（`#区块长度`），依据是 sub_4C1150 的 case 0x38 用
     //    {id → 元素*} 表取结构体 +12 的名字（4.0 反编译实证）；常量元素在同一张表里，
@@ -601,7 +655,8 @@ CString ERender::FuncCall(int d, bool bStatement, CString* pComment)
     CString comment = Text(cmt);
     if (pComment) *pComment = comment;
 
-    CString argStr = ArgsOf(d);
+    std::vector<CString> argList;
+    CString argStr = ArgsOf(d, &argList);
     if (TraceOn() && trace.size() < 40000)
     {
         CString x; x.Format(_T("  END@%u (args=%s)"), (unsigned)s.i, (LPCTSTR)argStr);
@@ -609,6 +664,7 @@ CString ERender::FuncCall(int d, bool bStatement, CString* pComment)
     }
 
     CString name;
+    BOOL bMember = FALSE;      // 库元数据里 category == -1 = 对象成员命令
     if (sp == -2)
     {
         for (size_t k = 0; k < subs.size(); k++)
@@ -634,7 +690,13 @@ CString ERender::FuncCall(int d, bool bStatement, CString* pComment)
         if (libOfSpace >= 0)
         {
             const EcCmd* pc = EcCmdAt(libOfSpace, (int)mid);
-            if (pc != NULL) real = pc->name;
+            if (pc != NULL)
+            {
+                real = pc->name;
+                // EcCmd::category == -1 ⇒ 对象成员命令（ec_lib.h:64 的字段说明）。
+                // 原版对这类命令画成 `对象.命令 (其余参数)`。
+                bMember = (pc->category == -1);
+            }
         }
         // 运算符排版优先用本地表（EcOpName 与真表一致，且它管 "+ - *" 这类显示）
         CString op = (sp == 0) ? EcOpName(mid) : CString();
@@ -649,23 +711,58 @@ CString ERender::FuncCall(int d, bool bStatement, CString* pComment)
     }
 
     if (bStatement && name.IsEmpty())
-        return CString();                       // spaceId == -1 的语句：注释/空行
-
-    CString out = name;
-    if (!bStatement && sp == 0 && mid != 52 && !argStr.IsEmpty())
     {
-        // 运算符表达式：把参数串原样包一层（参数已按 ", " 拼）
-        CString op = EcOpName(mid);
-        static const TCHAR* kInf[] = { _T("="), _T("≠"), _T("<"), _T(">"), _T("≤"), _T("≥"),
-                                       _T("+"), _T("-"), _T("*"), _T("/"), _T("\\"), _T("%"),
-                                       _T("且"), _T("或"), _T("&"), NULL };
-        for (int k = 0; kInf[k] != NULL; k++)
-            if (op == kInf[k]) return CString(_T("(")) + argStr + _T(")");
+        // spaceId == -1 的语句 = 注释行/空行。
+        // ⚠️ 注释文字就存在语句头的 `comment` mfc_string 里（`+13`，见 FuncCall 上方），
+        //    以前这里直接 `return CString()` 把 comment 丢了 —— 纯注释行只剩空行、
+        //    文字消失（实证：Bubble Sort.e 的两条英文注释查不到）。
+        //    空注释（comment_len == 0）= 空行，仍返回空串（这一支已对拍过）。
+        if (comment.IsEmpty())
+            return CString();
+        // ⚠️ 试过用语句头的 `code` mfc_string 画草稿语句 `' <语句原文>  ' <注释>`
+        //    （原版文本第 78 行确实是这个形状），但实测 **01_top 2.41% → 4.49%**，
+        //    已回滚 —— 说明 `code` 里那份文本被当成多行内容插进正文，破坏了行结构。
+        //    要再试必须先确认 code 字段的换行处理（下一步：先把 code 打进 trace 看内容）。
+        return CString(_T("' ")) + comment;
     }
-    if (argStr.IsEmpty()) out += _T(" ()");
-    else { out += _T(" ("); out += argStr; out += _T(")"); }
+
+    CString out;
+    CString glyph;
+    int nGlyph = (sp == 0) ? EcOpGlyph(mid, glyph) : 0;
+    if (bMember && argList.size() >= 1)
+    {
+        // 对象成员命令：`画板1.滚动写行 (“如果命令演示: 1+1=2”)`
+        // 判据 = 原版自己的剪贴板文本；EClone 曾经画成 `滚动写行 (画板1, “…” )`
+        //        （把对象当成第 1 个实参、还少了 `.` 接收者）。
+        CString rest;
+        for (size_t k = 1; k < argList.size(); k++)
+        {
+            if (!rest.IsEmpty()) rest += _T(", ");
+            rest += argList[k];
+        }
+        out = argList[0] + _T(".") + name;
+        if (rest.IsEmpty()) out += _T(" ()");
+        else { out += _T(" ("); out += rest; out += _T(")"); }
+    }
+    else if (nGlyph == 2 && argList.size() == 2)
+    {
+        // 中缀：`左 ＋ 右`（赋值 `变量 ＝ 值` 走同一支）
+        out = argList[0] + _T(" ") + glyph + _T(" ") + argList[1];
+    }
+    else if (nGlyph == 1 && argList.size() == 1)
+    {
+        // 前缀：负号 / 取反
+        out = glyph + argList[0];
+    }
+    else
+    {
+        out = name;
+        if (argStr.IsEmpty()) out += _T(" ()");
+        else { out += _T(" ("); out += argStr; out += _T(")"); }
+    }
     if (bStatement && !comment.IsEmpty()) out += _T("   ' ") + comment;
-    if (bStatement && !code.empty()) { CString x; x.Format(_T("   [code %dB]"), (int)code.size()); out += x; }
+    // ⚠️ 原版正文**不带** `[code NB]` 这类调试后缀（对照原版 1:1 截图）；
+    //    需要看编码长度时走 EC_TRACE_COLS 的 trace，不要写进显示文本。
     return out;
 }
 
@@ -719,7 +816,11 @@ void ERender::Statement(int d, std::vector<CString>& out, bool* pIsEnd, unsigned
         size_t at = s.i - 1;
         CString cmt;
         CString c = FuncCall(d, true, &cmt);
-        if (!c.IsEmpty()) { CString p; p.Format(_T("[%04u] "), (unsigned)at); out.push_back(p + c); }
+        // ⚠️ 原版正文**没有** `[偏移] ` 前缀（第 N 轮曾把它当"行号"打进显示文本，
+        //    结果整篇代码左边多出 4 位数字，和原版对拍的 y0..35 行带差异就是这么来的）。
+        //    `at` 仍然有用：定位语句时用 EC_TRACE_COLS 的 trace。
+        (void)at;
+        if (!c.IsEmpty()) out.push_back(c);
         return;
     }
     case 0x6B:
@@ -738,13 +839,15 @@ void ERender::Statement(int d, std::vector<CString>& out, bool* pIsEnd, unsigned
 void ERender::IfStmt(int d, unsigned char t, std::vector<CString>& out)
 {
     CString cmt;
-    // ⚠️ 同 LoopStmt：ArgsOf 已消费参数流，不能再读标记字节。
-    FuncCall(d, false, &cmt);                       // 块首 16B 头（名字即「如果」/「如果真」）
-    CString cond;
-
     bool bIfTrue = (t == 0x6C);
-    CString kw = bIfTrue ? _T("如果真") : _T("如果");
-    out.push_back(kw + (cond.IsEmpty() ? CString(_T(" ()")) : (_T(" (") + cond + _T(")"))));
+    // 块首就是一条**普通命令调用**：原版渲染成 `.<命令名> (参数…)`。
+    // 判据（原版自己的剪贴板文本，tools/text_oracle.py）：
+    //   `.如果 (1 ＋ 1 ＝ 2)` / `.如果真 (变量1 ＞ 3)  ' 将所有3以后的数字显示屏蔽`。
+    // 以前这里把 FuncCall 的结果丢掉、硬编码 `如果 ()`，于是条件**和行尾注释**都没了。
+    // 出处：渲染器 sub_4C1150 对每个元素的处理统一是「查名 + 参数流」。
+    CString hdr = FuncCall(d, false, &cmt);
+    if (hdr.IsEmpty()) hdr = bIfTrue ? _T("如果真") : _T("如果");
+    out.push_back(CString(_T(".")) + hdr);
 
     if (bIfTrue)
     {
@@ -764,7 +867,7 @@ void ERender::IfStmt(int d, unsigned char t, std::vector<CString>& out)
             }
             if (s.i == before) { s.bad = true; break; }
         }
-        out.push_back(_T("如果真结束 ()"));
+        out.push_back(_T(".如果真结束"));
         return;
     }
 
@@ -774,8 +877,8 @@ void ERender::IfStmt(int d, unsigned char t, std::vector<CString>& out)
         bool isEnd = false; unsigned char et = 0;
         Statement(d + 1, out, &isEnd, &et);
         if (!isEnd) { if (s.i == before) { s.bad = true; break; } continue; }
-        if (et == 0x72) { out.push_back(_T("如果结束 ()")); return; }
-        if (et == 0x73) { out.push_back(_T("如果真结束 ()")); return; }
+        if (et == 0x72) { out.push_back(_T(".如果结束")); return; }
+        if (et == 0x73) { out.push_back(_T(".如果真结束")); return; }
         if (et != 0x50)
         {
             // 0x51..0x55 只消费不结束块（同 bIfTrue 分支的结论）
@@ -783,7 +886,7 @@ void ERender::IfStmt(int d, unsigned char t, std::vector<CString>& out)
             break;
         }
         // 0x50（否则）也是长度 1、无头（同 sub_4C1C30 结论）——不能调 EndHeader
-        out.push_back(_T("否则"));
+        out.push_back(_T(".否则"));
         for (int g2 = 0; g2 < 5000 && !s.bad && s.i < s.n; g2++)
         {
             size_t before = s.i;
@@ -798,10 +901,10 @@ void ERender::IfStmt(int d, unsigned char t, std::vector<CString>& out)
             if (et2 >= 0x51 && et2 <= 0x55) continue;
             break;
         }
-        out.push_back(_T("如果结束 ()"));
+        out.push_back(_T(".如果结束"));
         return;
     }
-    out.push_back(_T("如果结束 ()"));
+    out.push_back(_T(".如果结束"));
 }
 
 void ERender::LoopStmt(int d, std::vector<CString>& out)
@@ -813,7 +916,9 @@ void ERender::LoopStmt(int d, std::vector<CString>& out)
     CString head = FuncCall(d, false, &cmt);
     CString args;
     if (head.IsEmpty()) head = _T("循环首");
-    out.push_back(head + (args.IsEmpty() ? CString(_T(" ()")) : (_T(" (") + args + _T(")"))));
+    // 原版：块首就是命令调用本身，`.<命令名> (参数…)`，**不再补一层 ` ()`**。
+    // 判据：`.计次循环首 (3, 变量1)`（EClone 曾输出 `计次循环首 (3, 变量1) ()`）。
+    out.push_back(CString(_T(".")) + head);
 
     for (int g = 0; g < 5000 && !s.bad && s.i < s.n; g++)
     {
@@ -853,14 +958,14 @@ void ERender::LoopStmt(int d, std::vector<CString>& out)
         { if (a[k].IsEmpty()) continue; if (!args2.IsEmpty()) args2 += _T(", "); args2 += a[k]; }
     }
     if (tail.IsEmpty()) tail = _T("循环尾");
-    out.push_back(tail + (args2.IsEmpty() ? CString(_T(" ()")) : (_T(" (") + args2 + _T(")"))));
+    // 循环尾同理：`.计次循环尾 ()` / `.循环判断尾 (变量1 ＜ 3)`
+    out.push_back(CString(_T(".")) + tail + (args2.IsEmpty() ? CString() : (_T(" (") + args2 + _T(")"))));
 }
 
 void ERender::SwitchStmt(int d, std::vector<CString>& out)
 {
     unsigned char t = s.u8();
     if (t != 0x6E) { CString x; x.Format(_T("?switch%02X"), t); Err(x); return; }
-    out.push_back(_T("判断 ()"));
 
     for (int branch = 0; branch < 200 && !s.bad && s.i < s.n; branch++)
     {
@@ -869,9 +974,13 @@ void ERender::SwitchStmt(int d, std::vector<CString>& out)
         //   曾经这里多一行 `unsigned char ct = s.u8();`，把下一个 token 吃掉，
         //   导致后续整段错位（实测 Find By Block.e：ArgsOf 正确停在 186，
         //   但 Statement 却在 187 读到 0x07）。与第 16 轮修 IfStmt/LoopStmt 同源。
-        FuncCall(d, false, &cmt);                    // 分支 16B 头（参数流已被 ArgsOf 消费）
-        CString cond;
-        out.push_back(_T("判断 ()"));
+        // 分支 16B 头（参数流已被 ArgsOf 消费）。原版的写法：
+        //   第一个分支 `.判断开始 (条件)`，后续分支 `.判断 (条件)`，默认 `.默认`，收尾 `.判断结束`。
+        // 判据：原版文本 `.判断开始 (1 ＋ 1 ＝ 2)` / `.判断 (1 ＋ 1 ＝ 3)` / `.默认` / `.判断结束`。
+        // 以前这里把 FuncCall 结果丢掉，还多推了一行 `判断 ()`（原版没有这一行）。
+        CString hdr = FuncCall(d, false, &cmt);
+        if (hdr.IsEmpty()) hdr = _T("判断");
+        out.push_back(CString(_T(".")) + ((branch == 0) ? EcRenameCall(hdr, _T("判断开始")) : hdr));
 
         for (int g2 = 0; g2 < 5000 && !s.bad && s.i < s.n; g2++)
         {
@@ -882,17 +991,17 @@ void ERender::SwitchStmt(int d, std::vector<CString>& out)
             if (et == 0x6E) break;                   // 下一分支
             if (et == 0x6F)                          // 默认分支（无头）
             {
-                out.push_back(_T("默认"));
+                out.push_back(_T(".默认"));
                 for (int g3 = 0; g3 < 5000 && !s.bad && s.i < s.n; g3++)
                 {
                     bool isEnd3 = false; unsigned char et3 = 0;
                     Statement(d + 1, out, &isEnd3, &et3);
                     if (!isEnd3) continue;
                     if (et3 == 0x54) continue;
-                    if (et3 == 0x74) { out.push_back(_T("判断结束 ()")); return; }
+                    if (et3 == 0x74) { out.push_back(_T(".判断结束")); return; }
                     break;
                 }
-                out.push_back(_T("判断结束 ()"));
+                out.push_back(_T(".判断结束"));
                 return;
             }
             // ⚠️ 与 IfStmt/LoopStmt 一致：0x51..0x55 都是「块体结束」标记，
@@ -900,11 +1009,11 @@ void ERender::SwitchStmt(int d, std::vector<CString>& out)
             //   曾经只处理 0x54 -> 0x53 落到下面的 break -> 分支循环在 `0x6E` 本身上调 FuncCall
             //   -> mid 读成 0x6e020000，参数流落到头尾部的 0x00 -> ?argtok00（实测置类型@120）。
             if (et >= 0x51 && et <= 0x55) continue;
-            if (et == 0x74) { out.push_back(_T("判断结束 ()")); return; }
+            if (et == 0x74) { out.push_back(_T(".判断结束")); return; }
             break;
         }
     }
-    out.push_back(_T("判断结束 ()"));
+    out.push_back(_T(".判断结束"));
 }
 
 } // namespace
@@ -950,7 +1059,11 @@ std::vector<CString> EcDecodeExpression(const unsigned char* pExpr, size_t nExpr
             if (nBad < 6)
             {
                 CString one;
-                one.Format(_T(" #%d:@%u(期望%u)"), (int)k, at,
+                // ⚠️ 这里必须是 m（语句序号），不是 k。
+                //    k 在上一段循环结束后 == nLo（line_offset 的【条数】），
+                //    以前误用 k，导致每条不符语句都打印成同一个假序号
+                //    （实测精易模块里打出 "#22"，而 22 只是 line_offset 条数）。
+                one.Format(_T(" #%d:@%u(期望%u)"), (int)m, at,
                            (j < lo.size()) ? lo[j] : 0xFFFFFFFFu);
                 detail += one;
             }

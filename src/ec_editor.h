@@ -164,6 +164,9 @@ protected:
         //                → 竖线画到那一行的中线，两条横虚线收尾
         int   blkEnd;
         int   blkLast;      // 块尾不显示时：块体最后一个显示行（▼ 画在它下面一格）
+        // ★ R-H：流程槽那个 ►►。原版是**每个「流程分支段」的首行**一个
+        //   （`.如果`/`.否则` 各一条、`.判断开始`/`.判断`/`.默认` 各一条），不是每个块一个。
+        BOOL  bArrow;
         CString code;
         std::vector<EcCell> cells;
     };
@@ -225,6 +228,17 @@ protected:
     //   列按**该源码行里的字节偏移**记（和 m_nCaretCol 同一套语义），-1 = 不在表格格里。
     int   m_nCaretCell;
     int   m_nCaretCellCol;
+    // ★ R-C（照原版 sub_4B55C0 用 this[31]/this[32] 直接记"行/列"的做法）：记下插入点
+    //   所在的**行号**（m_rows 的下标）。表格里"表头行"和"数据行"共用同一个 src
+    //   （实测 flowcmd.e：子程序表表头 src=4、数据行 src=4），只按 src 反查必然命中表头，
+    //   于是点数据格光标停在表头（y 差 21px）。-1 = 未知，退回按 src 反查。
+    int   m_nCaretRow;
+    // ★ R-D（照原版 this+140）：光标的"已创建 / 当前可见"两位状态。
+    //   原版 CreateCaret 只在 WM_SETFOCUS 做一次，移动前必 Hide、移动后 Show
+    //   （sub_4B4F70 → SetCaretPos → sub_4B4F40）。EClone 以前每次 UpdateCaret 都
+    //   CreateCaret+ShowCaret，重画路径上会留下上一位置的残影（"飘"）。
+    BOOL  m_bCaretCreated;
+    BOOL  m_bCaretShown;
     BOOL  m_bDragging;
     // 原版实测（shots\live_mark\before.png + after_click*.png）：文档刚打开时，
     // 流程槽里在**插入点所在行**画一个红色铅笔标记；用户第一次点鼠标/敲键盘后消失。

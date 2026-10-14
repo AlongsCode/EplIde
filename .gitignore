@@ -14,3 +14,5 @@ tools/*.obj
 tools/*.pdb
 __pycache__/
 *.pyc
+# 临时 dump（逆向/测量脚本的中间产物）
+temp/
