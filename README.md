@@ -7,11 +7,38 @@
 > iDraw 带来的三样**明确不做**：自绘菜单条（Menulwy）、输出面板（Scintilla）、ExUI 皮肤；菜单用原生 HMENU。
 > 交接文档见 `HANDOFF.md`（含全部踩过的坑和原版实测数字）。
 
+## 截图
+
+| EClone：程序集 / 代码编辑器 | EClone：窗体设计器 |
+|---|---|
+| ![EClone 主窗口](docs/images/main.png) | ![EClone 窗体设计器](docs/images/designer.png) |
+
+左图：菜单条 + 三行工具条 + 左侧**支持库树**（`LoadLibrary` 各 `.fne` 现读出来的**真实节点**）+ 右侧**结构化代码编辑器**
+（程序集头表格 / 子程序头表格 / 参数表 / 变量表 + 代码区 + 流程槽与流程控制虚线）+ 底部四个停靠面板 + 标签条。
+右图：**窗体设计器** —— 设计期的窗体与组件全部由支持库**真建**（`ITF 1 = PFN_CREATE_UNIT`），
+工作区 `#A0A0A0` + 窗体贴纸 `#F0F0F0` + 8px 黑点阵 + 选中框与 8 个 7x7 白框手柄；右侧组件箱数据也来自支持库。
+
+**怎么看"像不像"** —— 本工程的验收方式是**逐像素对拍**，不是肉眼看：
+
+![原版 vs 复刻](docs/images/compare.png)
+
+上：原版 IDE（本机 5.9 + iDraw/ExUI 美化套件）。下：EClone 打开同一份程序集（真易语言代码：程序集头 / 子程序 / 局部变量 / 计次循环 / 如果真 / 信息框 / 返回）。
+
+![交互步骤逐像素 diff](docs/images/diff_steps.png)
+
+`tools\interact_diff.py` 的产物：对"初始 / 点文本 / 键入字符 / 回车 / Ctrl+A"五步**各拍一张原版与复刻**，
+再逐像素求差（**红 = 不一致的像素**）。当前的差集中在光标/选区那一层，用来定位"还差几个像素"。
+上面两张图都是**可重跑**的：`tools\shot.ps1`（`PrintWindow` 抓主窗口）、`tools\cmp_shots.py` / `interact_diff.py`（对拍）；
+`shots\` 下还留着几百张过程图与窗口树 dump。
+
 ## 构建
 
 ```
 D:\eclone\build.bat          :: 没有 pwsh，用 cmd
 ```
+
+> 注：本工程**开发时的路径是 `D:\eclone`**，文档与脚本里的绝对路径都按那个写的；
+> 现在源码放在本仓库根目录（`src\` `tools\` `build.bat`），换了盘/目录时把脚本里的 `D:\eclone` 指到新位置即可。
 
 - 编译器：本机 VC6（`C:\Program Files (x86)\Microsoft Visual Studio\VC98`，完整版）
 - RC：`C:\Program Files (x86)\Microsoft Visual Studio\Common\MSDev98\Bin\RC.EXE`
